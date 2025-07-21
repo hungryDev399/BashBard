@@ -27,7 +27,7 @@
 
 1. **Clone the repo**  
    ```bash
-   git clone https://github.com/yourusername/bashbard.git
+   git clone https://github.com/5afagy/BashBard.git
    cd bashbard
    pip install -r requirements.txt
 
