@@ -16,6 +16,9 @@
 
 - **Context-Aware Guidance**  
   BashBard remembers your session history and current directory, so every suggestion is relevant to _where_ you are and _what_ you’ve done.
+  
+- **Safe-Mode Confirmations**  
+  Dangerous operations (e.g. `rm -rf /`) trigger a “Type **YES** to proceed” prompt to prevent accidents.
 
 
 
