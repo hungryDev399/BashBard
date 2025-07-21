@@ -44,6 +44,8 @@
 
 
 ##  Usage Examples
+<img width="1037" height="103" alt="image" src="https://github.com/user-attachments/assets/0f0c02b5-916f-4217-bf6e-4fa16777355f" />
+
 
 ````bash
 BashBard> sl
