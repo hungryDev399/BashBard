@@ -1,0 +1,116 @@
+# Python bytecode and cache
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+*.pyd
+*.dll
+
+# Virtual environments
+.venv
+.venv*/
+venv/
+venv*/
+ENV/
+env/
+env*/
+
+# dotenv
+.env
+.env.*
+
+# Packaging / distribution
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+*.egg-info/
+*.egg
+MANIFEST
+
+# PyInstaller
+*.spec
+*.manifest
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+*.cover
+*.py,cover
+
+# Type checkers / linters
+.mypy_cache/
+.pytype/
+.pyre/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Jupyter
+.ipynb_checkpoints
+.ipython/
+.profile_default/
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# OS-specific
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Icon?
+Desktop.ini
+
+# Logs and temp files
+logs/
+*.log
+*.tmp
+*.temp
+~$*
+*.swp
+*.swo
+*.bak
+
+# Caches
+.cache/
+
+# Version/Tool metadata
+.python-version
+.uv/
+.uv_cache/
+.rye/
+.rye_cache/
+
+# Local tooling
+/.cursor/
+.cursor/
+.history/
+
+# Databases / data (adjust as needed)
+data/
+*.sqlite
+*.db
+*.db-*
+
+
