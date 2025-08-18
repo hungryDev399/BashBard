@@ -26,6 +26,7 @@ from .state import State
 from .safety import check_danger
 from .nodes import replan as llm_replan, from_english as llm_from_english, from_error as llm_from_error
 from .llm import get_llm
+from .ux import label, header, code, warn, error as color_error, success, dim
 
 
 # Configure bash command
@@ -73,20 +74,20 @@ def english_to_command_if_needed(user_line: str, *, cwd: str, env: dict) -> str:
         mode = (result.get("candidate_mode") or "run").lower()
         if raw_cmd and mode != "explain":
             cmd = _sanitize_llm_command_text(raw_cmd)
-            if not cmd: 
+            if not cmd:
                 # Refuse to run ambiguous blob; inform the user
-                print("\r\n[AI] Command extraction failed; model returned non-shell content.\r\n", end="")
+                print(f"\r\n{label('AI')} Command extraction failed; model returned non-shell content.\r\n", end="")
                 return ""
             if result.get("candidate_explanation"):
-                print(f"\r\n[AI] {result['candidate_explanation']}\r\n", end="")
+                print(f"\r\n{label('AI')} {dim(result['candidate_explanation'])}\r\n", end="")
             return cmd
         elif result.get("candidate_explanation"):
-            print(f"\r\n[AI] {result['candidate_explanation']}\r\n", end="")
+            print(f"\r\n{label('AI')} {dim(result['candidate_explanation'])}\r\n", end="")
             return ""
         # If the model did not provide a runnable command, do not attempt to run the raw English
         return ""
     except Exception as e:
-        print(f"\r\n[AI Error] {e}\r\n", end="")
+        print(f"\r\n{label('AI','warning')} {color_error(str(e))}\r\n", end="")
         # On error, avoid executing the raw English text
         return ""
 
@@ -109,16 +110,16 @@ def repair_command_if_needed(prev_cmd: str, last_output_chunk: str, *, cwd: str,
         if raw_cmd and mode != "explain":
             cmd = _sanitize_llm_command_text(raw_cmd)
             if not cmd:
-                print("\r\n[AI Repair] Command extraction failed; model returned non-shell content.\r\n", end="")
+                print(f"\r\n{label('AI Repair','warning')} Command extraction failed; model returned non-shell content.\r\n", end="")
                 return None
             if result.get("candidate_explanation"):
-                print(f"\r\n[AI Repair] {result['candidate_explanation']}\r\n", end="")
+                print(f"\r\n{label('AI Repair')} {dim(result['candidate_explanation'])}\r\n", end="")
             return cmd
         elif result.get("candidate_explanation"):
-            print(f"\r\n[AI] {result['candidate_explanation']}\r\n", end="")
+            print(f"\r\n{label('AI')} {dim(result['candidate_explanation'])}\r\n", end="")
         return None
     except Exception as e:
-        print(f"\r\n[AI Repair Error] {e}\r\n", end="")
+        print(f"\r\n{label('AI Repair','warning')} {color_error(str(e))}\r\n", end="")
         return None
 
 
@@ -133,14 +134,14 @@ def approval_gate(cmd: str, *, context: str) -> bool:
         reasons = danger_result.get("reasons", [])
         
         if is_dangerous:
-            print(f"\r\n=== DANGEROUS COMMAND ===\r\n$ {cmd}\r\n", end="")
+            print(f"\r\n{header('DANGEROUS COMMAND','danger')}\r\n{code('$ ' + cmd)}\r\n", end="")
             if reasons:
-                print("Reasons:\r\n", end="")
+                print(warn("Reasons:") + "\r\n", end="")
                 for r in reasons:
                     print(f" - {r}\r\n", end="")
             
             # Ask for confirmation
-            print("Run this command? [y/N]: ", end="")
+            print(f"{warn('Run this command?')} {dim('[y/N]')}: ", end="")
             sys.stdout.flush()
             
             # Read user response in raw mode
@@ -161,7 +162,7 @@ def approval_gate(cmd: str, *, context: str) -> bool:
         # Safe command - auto-approve
         return True
     except Exception as e:
-        print(f"\r\n[Approval Error] {e}\r\n", end="")
+        print(f"\r\n{label('Approval','warning')} {color_error(str(e))}\r\n", end="")
         return True  # Default to allowing on error
 
 
@@ -263,14 +264,14 @@ class AITerminal:
         return not default_no
 
     def _prompt_fix_choice(self, failed_cmd: str, error_text: str, suggestion: str) -> str:
-        print("\r\n=== Command Failed ===", end="\r\n")
-        print(f"Failed: $ {failed_cmd}", end="\r\n")
+        print(f"\r\n{header('Command Failed','warning')}", end="\r\n")
+        print(f"Failed: {code('$ ' + failed_cmd)}", end="\r\n")
         preview = error_text.strip()
         if len(preview) > 200:
             preview = preview[:200] + "..."
-        print(f"Error: {preview}", end="\r\n")
-        print(f"\r\nSuggested fix: $ {suggestion}", end="\r\n")
-        print("Choose: [r]un, [c]ancel, [e]dit, [p]lan (replan): ", end="")
+        print(f"{color_error('Error:')} {preview}", end="\r\n")
+        print(f"\r\n{success('Suggested fix:')} {code('$ ' + suggestion)}", end="\r\n")
+        print(f"Choose: {dim('[r]un, [c]ancel, [e]dit, [p]lan (replan)')}: ", end="")
         sys.stdout.flush()
         ans = (self._read_line_raw() or "").lower()
         if ans.startswith("r"):
@@ -400,7 +401,7 @@ class AITerminal:
             if self._should_attempt_repair(self.last_failed_command):
                 # Check if this looks like a typo that could be fixed
                 if "command not found" in self.last_error_text.lower():
-                    print("\r\n[Hint: Use '/repair on' to enable auto-repair for typos]\r\n", end="")
+                    print("\r\n" + label('Hint','muted') + " Use " + code("'/repair on'") + " to enable auto-repair for typos\r\n", end="")
             return
             
         if self._repair_in_progress:
@@ -425,8 +426,8 @@ class AITerminal:
             )
             if not (isinstance(repaired, str) and repaired.strip()):
                 # No direct fix produced. Offer replan/edit/cancel so repair "works" every time.
-                print("\r\nNo automatic fix was generated.", end="\r\n")
-                print("Choose: [p]lan (replan), [e]dit, [c]ancel: ", end="")
+                print(f"\r\n{label('AI','warning')} No automatic fix was generated.", end="\r\n")
+                print(f"Choose: {dim('[p]lan (replan), [e]dit, [c]ancel')}: ", end="")
                 sys.stdout.flush()
                 choice = (self._read_line_raw() or "").lower()
                 if choice.startswith("p"):
@@ -440,7 +441,7 @@ class AITerminal:
                         pass
                     for ch in self.last_failed_command:
                         os.write(self.master_fd, ch.encode())
-                    os.write(sys.stdout.fileno(), f"$ {self.last_failed_command}\r\n".encode())
+                    os.write(sys.stdout.fileno(), f"{code('$ ' + self.last_failed_command)}\r\n".encode())
                 # cancel otherwise
                 return
 
@@ -455,7 +456,7 @@ class AITerminal:
                     # Pre-fill the suggestion into readline for manual editing
                     os.write(self.master_fd, b"\x15")  # clear line
                     os.write(self.master_fd, repaired.encode("utf-8"))
-                    os.write(sys.stdout.fileno(), f"$ {repaired}\r\n".encode())
+                    os.write(sys.stdout.fileno(), f"{code('$ ' + repaired)}\r\n".encode())
                     return
                 if choice == "replan":
                     fb = self._prompt_replan_feedback()
@@ -464,7 +465,7 @@ class AITerminal:
                 # else run
             # Safety approval before executing a repaired command
             if not approval_gate(repaired, context=self.last_output_text()):
-                print("\r\n[Repaired command rejected]\r\n", end="")
+                print(f"\r\n{label('Repair','warning')} Repaired command rejected\r\n", end="")
                 return
             # Run the repaired command
             self._pending_cmd = repaired
@@ -474,7 +475,7 @@ class AITerminal:
             self._repair_in_progress = False
 
     def _prompt_replan_feedback(self) -> str:
-        print("Describe adjustments for a safer/better alternative (blank to skip): ", end="")
+        print(f"Describe adjustments for a safer/better alternative {dim('(blank to skip)')}: ", end="")
         sys.stdout.flush()
         return self._read_line_raw()
 
@@ -485,18 +486,18 @@ class AITerminal:
             new_cmd = (out.get("candidate_command") or "").strip()
             expl = out.get("candidate_explanation") or ""
             if expl:
-                print(f"\r\n[AI Replan] {expl}\r\n", end="")
+                print(f"\r\n{label('AI Replan')} {expl}\r\n", end="")
             if not new_cmd:
                 return
             # Approval gate before running
             if not approval_gate(new_cmd, context=self.last_output_text()):
-                print("\r\n[Replanned command rejected]\r\n", end="")
+                print(f"\r\n{label('Replan','warning')} Replanned command rejected\r\n", end="")
                 return
             self._pending_cmd = new_cmd
             self._pending_output_start = len(self.last_output_lines)
             self._send_command_immediately(new_cmd)
         except Exception as e:
-            print(f"\r\n[Replan Error] {e}\r\n", end="")
+            print(f"\r\n{label('Replan','warning')} {color_error(str(e))}\r\n", end="")
 
     # --- context
 
@@ -584,16 +585,15 @@ class AITerminal:
                 return
             elif cmd == "/help":
                 help_text = (
-                    "\r\n=== BashBard Terminal Commands ===\r\n"
-                    "/e <request>  - Natural language to command\r\n"
-                    "/repair on    - Enable auto-repair (interactive approval)\r\n"
-                    "/repair auto  - Enable auto-repair and auto-run fixes\r\n"
-                    "/repair off   - Disable auto-repair (default)\r\n"
-                    "/dry on       - Enable dry-run mode\r\n"
-                    "/dry off      - Disable dry-run mode\r\n"
-                    "/help         - Show this help\r\n"
-                    "/quit         - Exit terminal\r\n"
-                    "\r\n"
+                    f"\r\n{header('BashBard Commands')}\r\n"
+                    f"  {code('/e <request>')}   Convert natural language to command\r\n"
+                    f"  {code('/repair on')}     Enable auto-repair (interactive approval)\r\n"
+                    f"  {code('/repair auto')}   Enable auto-repair and auto-run fixes\r\n"
+                    f"  {code('/repair off')}    Disable auto-repair (default)\r\n"
+                    f"  {code('/dry on')}        Enable dry-run mode\r\n"
+                    f"  {code('/dry off')}       Disable dry-run mode\r\n"
+                    f"  {code('/help')}          Show this help\r\n"
+                    f"  {code('/quit')}          Exit terminal\r\n\r\n"
                 )
                 os.write(sys.stdout.fileno(), help_text.encode())
                 # Just get a new prompt - bash never saw the /help command
@@ -604,16 +604,16 @@ class AITerminal:
                 if sub in ("on", "interactive"):
                     self.auto_repair = True
                     self.interactive_repair = True
-                    os.write(sys.stdout.fileno(), b"\r\n[Auto-repair enabled with interactive approval]\r\n")
+                    os.write(sys.stdout.fileno(), f"\r\n{label('Repair','success')} Auto-repair enabled with interactive approval\r\n".encode())
                 elif sub == "auto":
                     self.auto_repair = True
                     self.interactive_repair = False
-                    os.write(sys.stdout.fileno(), b"\r\n[Auto-repair enabled: auto-run fixes]\r\n")
+                    os.write(sys.stdout.fileno(), f"\r\n{label('Repair','success')} Auto-repair enabled: auto-run fixes\r\n".encode())
                 elif sub == "off":
                     self.auto_repair = False
-                    os.write(sys.stdout.fileno(), b"\r\n[Auto-repair disabled]\r\n")
+                    os.write(sys.stdout.fileno(), f"\r\n{label('Repair','muted')} Auto-repair disabled\r\n".encode())
                 else:
-                    os.write(sys.stdout.fileno(), b"\r\nUsage: /repair [on|interactive|auto|off]\r\n")
+                    os.write(sys.stdout.fileno(), f"\r\n{label('Usage','muted')} /repair [on|interactive|auto|off]\r\n".encode())
                 os.write(self.master_fd, b"\n")
                 return
             elif cmd.startswith("/e"):
@@ -635,11 +635,11 @@ class AITerminal:
                     transformed = transformed.strip()
                     if transformed:
                         line = transformed
-                        os.write(sys.stdout.fileno(), f"$ {line}\r\n".encode())
+                        os.write(sys.stdout.fileno(), f"{code('$ ' + line)}\r\n".encode())
                     else:
                         # If NL->cmd produced nothing, offer replan/edit instead of failing silently
-                        print("[AI] No command generated.", end="\r\n")
-                        print("Choose: [p]lan (replan), [e]dit, [c]ancel: ", end="")
+                        print(f"{label('AI','muted')} No command generated.", end="\r\n")
+                        print(f"Choose: {dim('[p]lan (replan), [e]dit, [c]ancel')}: ", end="")
                         sys.stdout.flush()
                         choice = (self._read_line_raw() or "").lower()
                         if choice.startswith("p"):
@@ -656,7 +656,7 @@ class AITerminal:
                             os.write(self.master_fd, b"\n")
                         return
                 else:
-                    os.write(sys.stdout.fileno(), b"\r\nUsage: /e <natural language request>\r\n")
+                    os.write(sys.stdout.fileno(), f"\r\n{label('Usage','muted')} /e <natural language request>\r\n".encode())
                     os.write(self.master_fd, b"\n")  # Get new prompt
                     return
             else:
@@ -668,13 +668,13 @@ class AITerminal:
         # Apply approval gate for generated commands
         if line != original_line:  # Command was transformed
             if not approval_gate(line, context=self.last_output_text()):
-                os.write(sys.stdout.fileno(), b"\r\n[Command rejected]\r\n")
+                os.write(sys.stdout.fileno(), f"\r\n{label('Approval','warning')} Command rejected\r\n".encode())
                 os.write(self.master_fd, b"\n")  # Get new prompt
                 return
         
         # Check if dry-run mode
         if self.dry_run:
-            os.write(sys.stdout.fileno(), f"\r\n[DRY-RUN] Would execute: $ {line}\r\n".encode())
+            os.write(sys.stdout.fileno(), f"\r\n{label('DRY-RUN','muted')} Would execute: {code('$ ' + line)}\r\n".encode())
             os.write(self.master_fd, b"\n")  # Get new prompt
             return
         
@@ -698,9 +698,9 @@ class AITerminal:
     # --- main loop
 
     def run(self) -> None:
-        print("BashBard Terminal - AI-Enhanced Shell")
-        print("Type '/help' for available commands")
-        print("Tip: Enable '/repair on' to auto-fix typos like 'lsf' → 'ls'\n")
+        print(header("BashBard Terminal — AI-Enhanced Shell"))
+        print(dim("Type '/help' for available commands"))
+        print(dim("Tip: Enable '/repair on' to auto-fix typos like 'lsf' → 'ls'\n"))
         
         self.spawn_shell()
         self.install_handlers()

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from .llm import get_llm
 from .safety import check_danger
 from .state import State
+from .ux import label, code, header, warn, dim
 
 
 _LLM = None
@@ -23,7 +24,7 @@ def _ensure_llm():
 
 def _llm_invoke_with_timeout(llm, prompt: str, timeout_seconds: int = 30):
     # Ensure this starts on a fresh line for better UX when used in PTY
-    print(f"\n[LLM] Contacting provider... (timeout {timeout_seconds}s)")
+    print(f"\n{label('LLM')} Contacting provider... {warn(f'(timeout {timeout_seconds}s)')}")
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(llm.invoke, prompt)
         try:
@@ -177,18 +178,18 @@ def approval_gate(state: State) -> State:
     is_dangerous = bool(state.get("danger"))
     if is_dangerous:
         
-        print("\n=== DANGEROUS COMMAND ===")
-        print(f"$ {state['candidate_command']}")
+        print(f"\n{header('DANGEROUS COMMAND','danger')}")
+        print(code(f"$ {state['candidate_command']}"))
         if state.get("candidate_explanation"):
             print(f"↳ {state['candidate_explanation']}")
     else:
         # Safe command: show explanation then auto-run
         if state.get("candidate_explanation") and not state.get("quiet"):
-            print(f"\nCommand: $ {state['candidate_command']}")
+            print(f"\nCommand: {code('$ ' + state['candidate_command'])}")
             print(f"↳ {state['candidate_explanation']}")
         return {"approval": "auto"}
     if is_dangerous and state.get("danger_reasons"):
-        print("Reasons:")
+        print(warn("Reasons:"))
         for r in state.get("danger_reasons", []):
             print(f" - {r}")
     ans = input("Run this command? [y/N] (y to run, n to cancel, e to replan): ").strip().lower()
@@ -227,10 +228,10 @@ def run_command(state: State) -> State:
 
     dry = state.get("dry_run") is True if state.get("dry_run") is not None else (os.getenv("DRY_RUN", "1") == "1")
     if dry:
-        print(f"\r\n[DRY-RUN] Would execute: $ {cmd}")
+        print(f"\r\n{label('DRY-RUN','muted')} Would execute: {code('$ ' + cmd)}")
         return {"result": {"exit_code": 0, "stdout": "(dry-run) not executed", "stderr": ""}}
 
-    print(f"\r\n[RUN] $ {cmd}")
+    print(f"\r\n{label('RUN')} {code('$ ' + cmd)}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     res: Dict[str, object] = {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
     if not state.get("quiet"):
