@@ -1,92 +1,106 @@
+## Agentic Shell Guard
 
-
-# BashBard
-
-**BashBard** is your AI-powered Linux shell tutor and command storyteller. Whether you mistype a command or only know what you _want_ to do in plain English, BashBard crafts the perfect shell incantation—and explains why it works.
-
-
+An agentic, safety-aware Linux command assistant. It converts natural language to shell commands, or fixes failing commands using their errors. Every candidate command passes through a danger check and an approval gate before (optionally) executing.
 
 ## Features
+- Natural language → single POSIX-friendly command + explanation
+- Command fixing using stderr + optional user intent
+- Heuristic danger checks for destructive patterns
+- Human approval gate with feedback loop (replan to safer alternative)
+- Dry-run mode by default
 
-- **Auto-correction & Explanation**  
-  If you type `sl`, BashBard suggests `ls -l`, explains the `-l` flag, and helps you learn as you go.
-
-- **Natural-Language → Shell**  
-  Describe your goal—“find all `.conf` files in `/etc` larger than 1 MB”—and receive the exact `find` command with annotations.
-
-- **Context-Aware Guidance**  
-  BashBard remembers your session history and current directory, so every suggestion is relevant to _where_ you are and _what_ you’ve done.
-  
-- **Safe-Mode Confirmations**  
-  Dangerous operations (e.g. `rm -rf /`) trigger a “Type **YES** to proceed” prompt to prevent accidents.
-
-
-
-
-## Installation
-
-1. **Clone the repo**  
-   ```bash
-   git clone https://github.com/5afagy/BashBard.git
-   cd bashbard
-   pip install -r requirements.txt
-
-2. **Configure your API keys**
-   Open `.env` then add Gemini key:
-
-   ```dotenv
-   GEMINI_API_KEY=key.......
-   ```
-
-4. **Run BashBard**
-
-   ```bash
-   python shell.py
-   ```
-
-
-
-##  Usage Examples
-<img width="1037" height="103" alt="image" src="https://github.com/user-attachments/assets/0f0c02b5-916f-4217-bf6e-4fa16777355f" />
-
-
-````bash
-BashBard> sl
-Error: 'sl' is not recognized.
-🤖 BashBard ▶️
-
- 1 The user intended to run ls.
- 2 ls
- 3 The user likely mistyped ls (list directory contents), typing sl instead.
-````
-
-• You likely meant ‘list files in long format.’ The `-l` flag shows permissions, owners, and sizes.
-```bash
-BashBard> find logs --size +10M
-find logs -size +10M
-The option --size is not valid for find; the correct option is -size.
+## Project structure
+```text
+agentic-bashbard/
+├─ agentic_shell_guard/
+│  ├─ __init__.py            # exports main
+│  ├─ __main__.py            # enables `python -m agentic_shell_guard`
+│  ├─ cli.py                 # CLI entrypoint and argument parsing
+│  ├─ graph.py               # LangGraph assembly
+│  ├─ llm.py                 # LLM provider selection (OpenAI / Google Gemini)
+│  ├─ nodes.py               # Node implementations (LLM calls, approval, run)
+│  ├─ safety.py              # Danger patterns and checks
+│  └─ state.py               # TypedDict for graph state
+├─ main.py                   # thin wrapper that calls package `main`
+└─ README.md
 ```
 
+## Requirements
+- Python 3.10+
 
+## Installation
+```bash
+pip install -U langchain langgraph langchain-openai langchain-google-genai typing_extensions
+```
 
-## 🤝 Contributing
+## Configuration
+Set one of the following depending on your provider choice.
 
-1. Fork the repository  
-2. Create a branch (`git checkout -b feature/xyz`)  
-3. Commit your changes (`git commit -m 'Add feature'`)  
-4. Push (`git push origin feature/xyz`) and open a Pull Request
+### OpenAI
+```bash
+export OPENAI_API_KEY=sk-...
+export LLM_PROVIDER=openai   # default
+export OPENAI_MODEL=gpt-4o-mini   # optional
+```
 
-Please keep AI system prompts in `ai_client.py` clear and concise.
+### Google Gemini
+```bash
+export GOOGLE_API_KEY=...
+export LLM_PROVIDER=google
+export GOOGLE_MODEL=gemini-1.5-flash   # optional
+```
 
+### Windows PowerShell equivalents
+```powershell
+$env:OPENAI_API_KEY = "sk-..."
+$env:LLM_PROVIDER = "openai"
+$env:DRY_RUN = "1"    # default; set to "0" to actually execute commands
+```
 
+### Execution mode
+- `DRY_RUN=1` (default) prints the command without executing.
+- Set `DRY_RUN=0` to execute after approval.
 
-## 📄 License
+## Usage
 
-MIT © 2025 Khafagy
+### Run as a module (preferred)
+```bash
+python -m agentic_shell_guard --english "list only hidden files in /etc"
+```
 
+```bash
+python -m agentic_shell_guard --fix --cmd "ls -z" --err "ls: invalid option -- 'z'"
+```
 
+### Run via wrapper
+```bash
+python main.py --english "show disk usage for /var sorted by size"
+```
 
-> Built with ❤️ by Khafagy  
-> LinkedIn: [linkedin.com/in/khafagy](https://linkedin.com/in/khafagy)  
-> Email: Ali5afagy@gmail.com  
+### CLI options
+- `--english <text>`: natural language request
+- `--fix --cmd <string> --err <string>`: fix a failing command using its stderr
+- `--intent <text>`: optional intent to guide the fixer when using `--fix`
+
+## Safety model
+1. A candidate command is generated (from English or by fixing an error).
+2. The command runs through `danger_check` with rules for destructive patterns (e.g., `rm -rf /`, piping curl | sh, writes to `/etc`, etc.).
+3. If safe: auto-approve and proceed to run (or dry-run).
+4. If risky: interactive approval gate prompts to approve, reject, or edit intent.
+5. On rejection: feedback is used to replan a safer alternative.
+
+Keep a human-in-the-loop for high-risk actions. Defaults keep you safe with `DRY_RUN=1`.
+
+## Extending
+- Add or adjust patterns in `agentic_shell_guard/safety.py`.
+- Modify prompts or node behavior in `agentic_shell_guard/nodes.py`.
+- Swap provider defaults in `agentic_shell_guard/llm.py`.
+
+## Troubleshooting
+- If nothing runs, confirm `DRY_RUN` is set to `0` and that your API key is set.
+- Ensure provider-specific packages are installed (OpenAI or Google GenAI) per your `LLM_PROVIDER`.
+
+## License
+Add your preferred license here.
+
 
