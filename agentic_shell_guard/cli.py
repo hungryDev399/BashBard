@@ -20,6 +20,7 @@ def parse_args():
     p.add_argument("--cmd", type=str, help="Failing command (for --fix)")
     p.add_argument("--err", type=str, help="Error output/stderr (for --fix)")
     p.add_argument("--intent", type=str, default="", help="Optional intent to guide fixing")
+    p.add_argument("--legacy", action="store_true", help="Use legacy interactive shell instead of PTY terminal")
     return p.parse_args()
 
 
@@ -39,9 +40,27 @@ def _print_summary(out: State) -> None:
 
 
 def _interactive_shell():
+    """Launch the new PTY-based terminal with full shell capabilities."""
+    import os
+    from .terminal import AITerminal
+    
+    # Get initial configuration from environment
+    dry_run = os.getenv("DRY_RUN", "0") == "1"
+    quiet = os.getenv("QUIET", "0") == "1"
+    auto_repair = os.getenv("AUTO_REPAIR", "0") == "1"
+    
+    # Create and run the PTY terminal
+    terminal = AITerminal(dry_run=dry_run, quiet=quiet)
+    if auto_repair:
+        terminal.auto_repair = True
+    terminal.run()
+
+
+def _legacy_interactive_shell():
+    """Legacy interactive shell for fallback/compatibility."""
     _ = get_llm  # explicitly reference to avoid linter removal of import
     app = build_graph()
-    print("Agentic Shell Guard interactive mode. Type '/help' for commands.\n")
+    print("Agentic Shell Guard interactive mode (legacy). Type '/help' for commands.\n")
     flags = {"dry_run": False, "quiet": False, "interactive": True}
     while True:
         try:
@@ -118,7 +137,10 @@ def main():
         _print_summary(out)
         return
 
-    # Default: interactive shell
-    _interactive_shell()
+    # Default: interactive shell (use legacy if specified)
+    if getattr(args, "legacy", False):
+        _legacy_interactive_shell()
+    else:
+        _interactive_shell()
 
 

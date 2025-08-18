@@ -22,7 +22,8 @@ def _ensure_llm():
 
 
 def _llm_invoke_with_timeout(llm, prompt: str, timeout_seconds: int = 30):
-    print(f"[LLM] Contacting provider... (timeout {timeout_seconds}s)")
+    # Ensure this starts on a fresh line for better UX when used in PTY
+    print(f"\n[LLM] Contacting provider... (timeout {timeout_seconds}s)")
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(llm.invoke, prompt)
         try:
@@ -62,42 +63,70 @@ def _parse_llm_json(content: str) -> Dict[str, str]:
 
 def from_english(state: State) -> State:
     llm = _ensure_llm()
-    prompt = (
+    strict = bool(state.get("strict_json"))
+    base_prompt = (
         "You are a Linux shell expert. Convert the user's natural-language request into a single, safe (if possible), POSIX-compatible command when possible.\n"
-        "If the command is dangerous, return the command and explanation, and there is a danger check that will assess the output before running it.\n"
-        "Return *only* JSON with keys: command, explanation, mode.\n"
+        "If the command is dangerous, return the command and explanation; a separate danger check will assess it before running.\n"
+        "Return ONLY JSON with keys: command, explanation, mode. NO prose, NO code fences.\n"
         "If no safe/runnable command is appropriate, set mode to 'explain' and put your guidance in 'explanation' and leave 'command' empty.\n"
         f"Request: {state['user_request']}"
     )
-    try:
-        msg = _llm_invoke_with_timeout(llm, prompt)
-    except Exception as e:
-        return {"candidate_command": "", "candidate_explanation": f"LLM error: {e}"}
-    data = _parse_llm_json(getattr(msg, "content", str(msg)))
-    mode = (data.get("mode") or "run").strip().lower()
-    return {"candidate_command": data.get("command", ""), "candidate_explanation": data.get("explanation", ""), "candidate_mode": mode}
+    prompts = [base_prompt]
+    if strict:
+        prompts.append(base_prompt + "\nRespond STRICTLY in JSON. No extra text. Schema: {\"command\": string, \"explanation\": string, \"mode\": \"run\"|\"explain\"}.")
+
+    last_exc = None
+    for p in prompts:
+        try:
+            msg = _llm_invoke_with_timeout(llm, p)
+        except Exception as e:
+            last_exc = e
+            continue
+        data = _parse_llm_json(getattr(msg, "content", str(msg)))
+        # If parser fell back to "plain text" message, retry if strict
+        if strict and (data.get("explanation", "").lower().startswith("model returned plain text")):
+            continue
+        mode = (data.get("mode") or "run").strip().lower()
+        return {"candidate_command": data.get("command", ""), "candidate_explanation": data.get("explanation", ""), "candidate_mode": mode}
+    # All attempts failed
+    if last_exc is not None:
+        return {"candidate_command": "", "candidate_explanation": f"LLM error: {last_exc}", "candidate_mode": "explain"}
+    return {"candidate_command": "", "candidate_explanation": "", "candidate_mode": "explain"}
 
 
 def from_error(state: State) -> State:
     llm = _ensure_llm()
     intent = state.get("user_request", "")
-    prompt = (
+    strict = bool(state.get("strict_json"))
+    base_prompt = (
         "You are a Linux CLI fixer. Given a command that failed and its error output, propose a corrected command.\n"
         "Assume a typical Debian/Ubuntu environment unless specified.\n"
         "If the intent is ambiguous, choose the most likely command.\n"
-        "Return JSON: {command, explanation, mode}.\n"
+        "Return ONLY JSON: {command, explanation, mode}. NO prose, NO code fences.\n"
         "If the best action is to explain instead of running anything (e.g., user typed a non-existent command or must supply operands), set mode to 'explain' and leave 'command' empty.\n\n"
         f"Intent (optional): {intent}\n"
         f"Command: {state['last_command']}\n"
         f"Error: {state['last_error']}\n"
     )
-    try:
-        msg = _llm_invoke_with_timeout(llm, prompt)
-    except Exception as e:
-        return {"candidate_command": "", "candidate_explanation": f"LLM error: {e}"}
-    data = _parse_llm_json(getattr(msg, "content", str(msg)))
-    mode = (data.get("mode") or "run").strip().lower()
-    return {"candidate_command": data.get("command", ""), "candidate_explanation": data.get("explanation", ""), "candidate_mode": mode}
+    prompts = [base_prompt]
+    if strict:
+        prompts.append(base_prompt + "\nRespond STRICTLY in JSON. No extra text. Schema: {\"command\": string, \"explanation\": string, \"mode\": \"run\"|\"explain\"}.")
+
+    last_exc = None
+    for p in prompts:
+        try:
+            msg = _llm_invoke_with_timeout(llm, p)
+        except Exception as e:
+            last_exc = e
+            continue
+        data = _parse_llm_json(getattr(msg, "content", str(msg)))
+        if strict and (data.get("explanation", "").lower().startswith("model returned plain text")):
+            continue
+        mode = (data.get("mode") or "run").strip().lower()
+        return {"candidate_command": data.get("command", ""), "candidate_explanation": data.get("explanation", ""), "candidate_mode": mode}
+    if last_exc is not None:
+        return {"candidate_command": "", "candidate_explanation": f"LLM error: {last_exc}", "candidate_mode": "explain"}
+    return {"candidate_command": "", "candidate_explanation": "", "candidate_mode": "explain"}
 
 
 def from_direct(state: State) -> State:
@@ -198,10 +227,10 @@ def run_command(state: State) -> State:
 
     dry = state.get("dry_run") is True if state.get("dry_run") is not None else (os.getenv("DRY_RUN", "1") == "1")
     if dry:
-        print(f"\n[DRY-RUN] Would execute: $ {cmd}")
+        print(f"\r\n[DRY-RUN] Would execute: $ {cmd}")
         return {"result": {"exit_code": 0, "stdout": "(dry-run) not executed", "stderr": ""}}
 
-    print(f"\n[RUN] $ {cmd}")
+    print(f"\r\n[RUN] $ {cmd}")
     proc = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     res: Dict[str, object] = {"exit_code": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
     if not state.get("quiet"):
