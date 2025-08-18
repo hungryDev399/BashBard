@@ -73,7 +73,7 @@ def english_to_command_if_needed(user_line: str, *, cwd: str, env: dict) -> str:
         mode = (result.get("candidate_mode") or "run").lower()
         if raw_cmd and mode != "explain":
             cmd = _sanitize_llm_command_text(raw_cmd)
-            if not cmd:
+            if not cmd: 
                 # Refuse to run ambiguous blob; inform the user
                 print("\r\n[AI] Command extraction failed; model returned non-shell content.\r\n", end="")
                 return ""
