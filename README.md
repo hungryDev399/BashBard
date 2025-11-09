@@ -79,12 +79,17 @@ Saved API key to /root/.local/share/bashbard/.env
 ```bash
 BashBard
 ```
+## Usage Examples
+<img width="1106" height="401" alt="image" src="https://github.com/user-attachments/assets/7160800a-4b77-4513-a346-baaa81639e82" />
 
-### Uninstall
+
+BashBard understands your intent, it’s not just syntax-aware, it’s *context-aware.*
+
+<!--### Uninstall
 
 ```bash
 rm -rf ~/.local/share/bashbard ~/.local/bin/BashBard
-```
+``` -->
 ## Core Features
 
 | Feature                        | Description                                                         |                         
@@ -104,12 +109,6 @@ rm -rf ~/.local/share/bashbard ~/.local/bin/BashBard
 * Built-in **danger heuristics** to prevent destructive actions
 
 > 💡 **Pro Tip:** Run `/repair on` to let BashBard automatically fix simple typos like `gti` → `git`.
-
-## Usage Examples
-<img width="1106" height="401" alt="image" src="https://github.com/user-attachments/assets/7160800a-4b77-4513-a346-baaa81639e82" />
-
-
-BashBard understands your intent, it’s not just syntax-aware, it’s *context-aware.*
 
 ## Technology Overview
 
