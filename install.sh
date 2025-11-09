@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ==========================================================
-#  BashBard Installer (first-run API prompt built into launcher)
-#  - Reexecs with bash (no sh/dash syntax errors)
-#  - Creates BashBard + bashbard
-#  - Works immediately by placing shims in a PATH dir when possible
-#  - If installer is non-interactive, launcher will prompt for API on first run
+#  BashBard Installer (fixed)
+#  AI Assistant for Shell Automation and Command Correction
+#  Author: Khafagy | Co-Developer: Naggar
+#  Maintainer of this fix: (installer rewrite)
+#  License: Apache 2.0
 # ==========================================================
 
 # --- Re-exec with Bash if invoked by sh/dash/etc. ---
