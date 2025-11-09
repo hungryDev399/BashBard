@@ -194,7 +194,7 @@ BashBard is a community project, contributions are welcome. Ways to contribute:
 **Author:** Khafagy  
 **Co-Developer:** Naggar
 
-**License:** [MIT License](https://opensource.org/licenses/MIT)
+**License:** [Apache 2.0](https://opensource.org/licenses/Apache-2.0)
 
 > Built with ❤️ open to contributors and collaborators from the security, devops, and AI communities.
 
