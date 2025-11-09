@@ -136,8 +136,8 @@ if [[ -t 0 && -t 1 ]]; then
       /^GOOGLE_API_KEY=/{print "GOOGLE_API_KEY=" key; done=1; next}
       {print}
       END{if(!done) print "GOOGLE_API_KEY=" key}
-    ' "$ENV_PATH" | $SUDO tee "$ENV_PATH.tmp" >/dev/null
-    $SUDO mv "$ENV_PATH.tmp" "$ENV_PATH"
+    ' "$ENV_PATH" | $SUDO tee "$ENV_PATH" >/dev/null
+    $SUDO mv "$ENV_PATH" "$ENV_PATH"
     success "Gemini API key saved to $ENV_PATH"
   else
     warn "No API key entered during install; launcher will prompt on first run."
@@ -172,7 +172,7 @@ write_env_key() {
     /^GOOGLE_API_KEY=/{print \"GOOGLE_API_KEY=\" key; done=1; next}
     {print}
     END{if(!done) print \"GOOGLE_API_KEY=\" key}
-  " \"$ENV_PATH\" > \"$ENV_PATH.tmp\" && mv \"$ENV_PATH.tmp\" \"$ENV_PATH\"
+  " \"$ENV_PATH\" > \"$ENV_PATH\" && mv \"$ENV_PATH\" \"$ENV_PATH\"
 }
 
 prompt_key() {
