@@ -159,7 +159,7 @@ def _print_banner() -> None:
                 "Organization: Cyber Force LLC | Authors: Khafagy & Nagaar\n"
                 "Core Strengths: Intelligence • Safety • Explainability • Automation\n"
                 "Mission: Empower professionals to work smarter and safer through AI-driven command insight\n"
-                "License: MIT\n"
+                "License: Apache-2.0 license\n"
                 "========================================================\n"
             )
     except Exception:
