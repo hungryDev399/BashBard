@@ -1,106 +1,202 @@
-## Agentic Shell Guard
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![LLM: Gemini](https://img.shields.io/badge/LLM-Google%20Gemini-brightgreen.svg)
+![Downloads](https://img.shields.io/github/downloads/5afagy/BashBard/total)
+![Visitors](https://visitor-badge.laobi.icu/badge?page_id=5afagy.BashBard)
 
-An agentic, safety-aware Linux command assistant. It converts natural language to shell commands, or fixes failing commands using their errors. Every candidate command passes through a danger check and an approval gate before (optionally) executing.
+# 🧠 **BashBard**
+### *AI Assistant for Shell Automation and Command Correction*
 
-## Features
-- Natural language → single POSIX-friendly command + explanation
-- Command fixing using stderr + optional user intent
-- Heuristic danger checks for destructive patterns
-- Human approval gate with feedback loop (replan to safer alternative)
-- Dry-run mode by default
 
-## Project structure
-```text
-agentic-bashbard/
-├─ agentic_shell_guard/
-│  ├─ __init__.py            # exports main
-│  ├─ __main__.py            # enables `python -m agentic_shell_guard`
-│  ├─ cli.py                 # CLI entrypoint and argument parsing
-│  ├─ graph.py               # LangGraph assembly
-│  ├─ llm.py                 # LLM provider selection (OpenAI / Google Gemini)
-│  ├─ nodes.py               # Node implementations (LLM calls, approval, run)
-│  ├─ safety.py              # Danger patterns and checks
-│  └─ state.py               # TypedDict for graph state
-├─ main.py                   # thin wrapper that calls package `main`
-└─ README.md
-```
+### ⚡ Overview
 
-## Requirements
-- Python 3.10+
+**BashBard** is an **AI-powered command-line assistant** that transforms your Linux terminal into an intelligent, safety-aware environment.  
+It understands natural language, translates it into optimized shell commands, repairs failing commands, and provides built-in safety checks, all inside a **real PTY-based bash experience**.
 
-## Installation
+Built for developers, system administrators, security engineers, DevOps professionals, AI automation enthusiasts, and *anyone who lives in the terminal*, BashBard makes your command line **smarter, safer, and faster**.
+
+
+## 💡 Why BashBard Exists
+
+Working in the terminal can be powerful, but also risky and repetitive.  
+We all forget syntax, mistype commands, or execute something destructive by accident.  
+**BashBard** was created to eliminate these pain points:
+
+- **Forget the syntax**: just describe what you want in plain English.  
+- **Fix errors instantly**: BashBard learns from stderr and replans your command.  
+- **Stay safe**: every command is analyzed by an AI safety layer before execution.  
+- **Automate intuitively**: BashBard combines intelligence with the raw power of bash.
+
+> **“Your terminal, reimagined, smarter, safer, and built for humans.”**
+
+
+## ⚙️ Installation
+
+BashBard ships with an automated installer that sets up everything for you.
 ```bash
-pip install -U langchain langgraph langchain-openai langchain-google-genai typing_extensions
-```
+git clone https://github.com/5afagy/BashBard.git
+cd BashBard
+chmod +x install.sh
+./install.sh
+````
 
-## Configuration
-Set one of the following depending on your provider choice.
+During installation, the script will:
 
-### OpenAI
-```bash
-export OPENAI_API_KEY=sk-...
-export LLM_PROVIDER=openai   # default
-export OPENAI_MODEL=gpt-4o-mini   # optional
-```
+* Create a **dedicated virtual environment**.
+* Install all dependencies from `requirements.txt`.
+* Prompt you for your **Google Gemini API key**.
+* Auto-generate your `.env` file.
 
-### Google Gemini
-```bash
-export GOOGLE_API_KEY=...
-export LLM_PROVIDER=google
-export GOOGLE_MODEL=gemini-1.5-flash   # optional
-```
-
-### Windows PowerShell equivalents
-```powershell
-$env:OPENAI_API_KEY = "sk-..."
-$env:LLM_PROVIDER = "openai"
-$env:DRY_RUN = "1"    # default; set to "0" to actually execute commands
-```
-
-### Execution mode
-- `DRY_RUN=1` (default) prints the command without executing.
-- Set `DRY_RUN=0` to execute after approval.
-
-## Usage
-
-### Run as a module (preferred)
-```bash
-python -m agentic_shell_guard --english "list only hidden files in /etc"
-```
+### Start BashBard
 
 ```bash
-python -m agentic_shell_guard --fix --cmd "ls -z" --err "ls: invalid option -- 'z'"
+BashBard
 ```
 
-### Run via wrapper
+### Uninstall
+
 ```bash
-python main.py --english "show disk usage for /var sorted by size"
+rm -rf ~/.local/share/bashbard ~/.local/bin/BashBard
 ```
 
-### CLI options
-- `--english <text>`: natural language request
-- `--fix --cmd <string> --err <string>`: fix a failing command using its stderr
-- `--intent <text>`: optional intent to guide the fixer when using `--fix`
+## 🔧 Configuration
 
-## Safety model
-1. A candidate command is generated (from English or by fixing an error).
-2. The command runs through `danger_check` with rules for destructive patterns (e.g., `rm -rf /`, piping curl | sh, writes to `/etc`, etc.).
-3. If safe: auto-approve and proceed to run (or dry-run).
-4. If risky: interactive approval gate prompts to approve, reject, or edit intent.
-5. On rejection: feedback is used to replan a safer alternative.
+Your `.env` file stores the main configuration variables.
+You can edit it anytime (found at `~/.local/share/bashbard/.env`):
 
-Keep a human-in-the-loop for high-risk actions. Defaults keep you safe with `DRY_RUN=1`.
+```bash
+LLM_PROVIDER=google
+GOOGLE_API_KEY=your_api_key_here
+GOOGLE_MODEL=gemini-2.5-flash-lite
+DRY_RUN=0
+```
+## Core Features
 
-## Extending
-- Add or adjust patterns in `agentic_shell_guard/safety.py`.
-- Modify prompts or node behavior in `agentic_shell_guard/nodes.py`.
-- Swap provider defaults in `agentic_shell_guard/llm.py`.
+| Feature                        | Description                                                         |                             |
+| ------------------------------ | ------------------------------------------------------------------- | --------------------------- |
+| 🗣️ Natural Language → Command | Type `/e <request>` to turn plain English into bash.                |                             |
+| 🔧 Command Repair              | Fixes typos and broken commands automatically.                      |                             |
+| 🛡️ Safety Checks              | Detects risky commands (`rm -rf /`, `curl                           | sh`) and asks for approval. |
+| 🧪 Dry-Run Mode                | Preview commands without running them (`/dry on`).                  |                             |
+| 💻 Real Bash Integration       | Runs inside a true PTY — supports colors, jobs, signals, and pipes. |                             |
 
-## Troubleshooting
-- If nothing runs, confirm `DRY_RUN` is set to `0` and that your API key is set.
-- Ensure provider-specific packages are installed (OpenAI or Google GenAI) per your `LLM_PROVIDER`.
+### ⚙️ **Advanced Features**
 
-## License
-Add your preferred license here.
+* Context-aware **auto-repair** with re-planning (`/repair auto`)
+* Intelligent **output filtering** for clean AI feedback
+* Quick **alias injection** (`/alias basic`)
+* Customizable **dry-run**, **quiet**, and **auto-repair** modes
+* Built-in **danger heuristics** to prevent destructive actions
 
+> 💡 **Pro Tip:** Run `/repair on` to let BashBard automatically fix simple typos like `gti` → `git`.
 
+## Usage Examples
+
+```bash
+# Convert natural language to command
+/e show all python files in current folder
+# AI → ls -R | grep '\.py$'
+
+# Fix broken commands
+gti status
+# AI detects typo → Did you mean: git status?
+
+# Toggle modes
+/repair on     # enable auto-repair
+/dry on        # preview commands without execution
+/dry off       # execute normally
+/quit          # exit BashBard
+```
+
+BashBard understands your intent, it’s not just syntax-aware, it’s *context-aware.*
+
+## Technology Overview
+
+BashBard is engineered with a modular architecture built on modern AI and system libraries.
+
+**Stack:**
+
+* Python 3.12+
+* Google Gemini (default) via **LangChain / LangGraph**
+* PTY shell system (using `pty`, `termios`, and `fcntl`)
+
+### Architecture
+
+```
+BashBard/
+├── cli.py          → Command-line entry & argument parsing
+├── terminal.py     → PTY AI-powered interactive shell
+├── llm.py          → AI provider (Gemini / OpenAI)
+├── nodes.py        → LangGraph nodes for AI actions
+├── safety.py       → Danger detection & safety logic
+├── graph.py        → Graph orchestration
+├── state.py        → State management
+└── ux.py           → Rich text & user interface helpers
+```
+
+**Core engine:** `terminal.py` runs the real-time AI terminal.
+**CLI wrapper:** `cli.py` decides mode (interactive, legacy, one-shot).
+**LLM logic:** `llm.py`, `nodes.py`, and `safety.py` handle intelligence and protection.
+
+## Future Roadmap *Legend of Features*
+
+BashBard is evolving. Below is a focused, visionary roadmap, a **legend** of planned capabilities that will make the tool indispensable for developers, security pros, and anyone who uses Linux daily.
+
+### Legend Key Future Capabilities
+- 🔄 **Multi-model Orchestration**  
+  Combine the best of Google Gemini, OpenAI, and other models to balance cost, latency, and accuracy.
+
+- 🧠 **Session Memory & Context**  
+  Persistent, privacy-respecting session memory so BashBard understands earlier commands, project context, and multi-step workflows, enabling smarter suggestions and fewer repeated prompts.
+
+- ⚙️ **Local / Offline Model Support**  
+  Run models on-prem or locally for air-gapped environments and sensitive workflows.
+
+- ☁️ **Cloud Audit & Command Analytics**  
+  Optional, privacy-first telemetry and cloud dashboards for reviewing executed commands, trends, and team activity (opt-in only).
+
+- 🧩 **Plugin API & Extensibility**  
+  Allow third-party plugins to add domain-specific intelligence (e.g., Docker, Kubernetes, AWS, pentest helpers).
+
+- 🔐 **Safe Execution Sandboxes**  
+  Built-in sandboxing modes for testing risky commands before applying to production systems.
+
+- 🛠️ **Pentester Companion Mode** *(expert-focused)*  
+  Tools for security assessments: capture evidence, checkpoint results, checklist automation, recommended next steps, and context-aware exploit mitigation suggestions, designed to help pentesters work faster and more auditable.
+
+- 📊 **Command History Intelligence**  
+  Analyze history to recommend automation, refactors, aliases, or safe scripts; surface repeated manual steps for conversion into reproducible tasks.
+
+- 🧾 **Explainability & Provenance**  
+  Track why a suggested command was produced (model prompt, reasoning, relevant context) so results are auditable and defensible.
+
+- 🤝 **Collaboration & Team Profiles**  
+  Share context, safe policies, and custom rule sets across teams (with privacy controls).
+
+## 🤝 How You Can Help (Open to Collaborators)
+
+BashBard is a community project, contributions are welcome. Ways to contribute:
+
+- ⭐ Star & fork the repo  
+- 🐛 Open issues for bugs or improvement ideas  
+- ✍️ Submit pull requests (features, docs, tests)  
+- 💬 Join Discussions to propose roadmap items or plugins  
+- 🔒 Help with security reviews and safe execution patterns
+
+**Contribution guide:** Fork → branch → PR → review. Keep changes focused and well-documented.
+
+## 👨‍💻 Authors & License
+
+**Author:** Khafagy  
+**Co-Developer:** Naggar
+
+**License:** [MIT License](https://opensource.org/licenses/MIT)
+
+> Built with ❤️ open to contributors and collaborators from the security, devops, and AI communities.
+
+## 🏁 Get Involved
+
+Want to build a plugin, propose a pentest helper, or sponsor a feature? Open an issue or start a discussion at the project repo:
+
+`https://github.com/5afagy/BashBard`
+
+Together we’ll make BashBard an essential, trustworthy companion for anyone working at the shell.
