@@ -92,13 +92,24 @@ rm -rf ~/.local/share/bashbard ~/.local/bin/BashBard
 ``` -->
 ## Core Features
 
-| Feature                        | Description                                                         |                         
-| ------------------------------ | ------------------------------------------------------------------- | 
-| 🗣️ Natural Language → Command | Type `/e <request>` to turn plain English into bash.                |                      
-| 🔧 Command Repair              | Fixes typos and broken commands automatically.                      |                      
-| 🛡️ Safety Checks              | Detects risky commands (`rm -rf /`, `curl sh`) and asks for approval. |                     
-| 🧪 Dry-Run Mode                | Preview commands without running them (`/dry on`).                  |                             
-| 💻 Real Bash Integration       | Runs inside a true PTY — supports colors, jobs, signals, and pipes. |                        
+| Feature | How to Use | Live Example |
+|--------|------------|--------------|
+| **Natural Language → Command** | `/e <request>` | <pre>/e list all .log files older than 7 days<br>→ find /var/log -name "*.log" -mtime +7</pre> |
+| **Auto-Repair (Interactive)** | `/repair on` | <pre>gti status<br>AI: Did you mean `git status`?<br>[r]un / [e]dit / [c]ancel</pre> |
+| **Auto-Repair (Silent)** | `/repair auto` | <pre>lsf<br>→ ls -F (runs automatically)</pre> |
+| **Disable Auto-Repair** | `/repair off` | No AI fixes, default mode |
+| **Dry-Run Mode** | `/dry on` | <pre>/e delete temp files<br>Would execute: rm -rf /tmp/*</pre> |
+| **Dry-Run Status** | `/dry status` | `DRY-RUN: ENABLED` |
+| **Quick Aliases** | `/alias basic` | <pre>ll → ls -alF<br>la → ls -A<br>l → ls -CF</pre> |
+| **Replan on Failure** | Choose `[p]lan` after error | <pre>docker run -p 80:80 app<br>AI Plan:<br>[1] docker pull app<br>[2] docker run -p 8080:80 app</pre> |
+| **Universal Safety Gate** | **All commands** (even typed) | <pre>rm -rf /home<br>DANGEROUS: Targets root-owned path<br>Why risky: irreversible data loss<br>Proceed? [y/N]</pre> |
+| **Help & Exit** | `/help` or `/quit` | Shows full command reference |
+
+> **Pro Workflow:**  
+> 1. Start with `/repair on` + `/dry on` → explore safely  
+> 2. Trust the flow? → `/repair auto` for speed  
+> 3. Need full control? → `/dry off` + manual approval
+
 
 ### ⚙️ **Advanced Features**
 
