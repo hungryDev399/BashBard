@@ -129,7 +129,7 @@ if _HAS_RICH:
         "[green]Authors:[/] Khafagy & Nagaar\n"
         "[green]Core Strengths:[/] Intelligence • Safety • Explainability • Automation\n"
         "[green]Mission:[/] Empower professionals to work smarter and safer through AI-driven command insight\n"
-        "[green]License:[/] MIT"
+        "[green]License:[/] Apache-2.0 license"
     )
 
     content = Group(Align.center(title), body)  # ← true center for just "BashBard"
