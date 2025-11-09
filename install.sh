@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 # ==========================================================
-#  BashBard Installer (fixed)
-#  AI Assistant for Shell Automation and Command Correction
-#  Author: Khafagy | Co-Developer: Naggar
-#  Maintainer of this fix: (installer rewrite)
+#  BashBard Installer (path-safe, immediate-run)
+#  Fixes: sh vs bash, PATH availability, lowercase alias
 #  License: Apache 2.0
 # ==========================================================
 
@@ -13,7 +11,6 @@ if [ -z "${BASH_VERSION:-}" ]; then
 fi
 
 set -euo pipefail
-
 umask 022
 
 REPO_URL="https://github.com/5afagy/BashBard.git"
@@ -26,15 +23,13 @@ RED=$'\033[1;31m'
 CYAN=$'\033[1;36m'
 RESET=$'\033[0m'
 
-# --- Helper functions ---
+# --- Helpers ---
 info()    { echo -e "${CYAN}➡${RESET} $*"; }
 warn()    { echo -e "${YELLOW}⚠${RESET} $*"; }
 error()   { echo -e "${RED}❌${RESET} $*" >&2; exit 1; }
 success() { echo -e "${GREEN}✅${RESET} $*"; }
 
-cleanup() {
-  [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" ]] && rm -rf "$TMP_DIR"
-}
+cleanup() { [[ -n "${TMP_DIR:-}" && -d "$TMP_DIR" ]] && rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
 
 usage() {
@@ -47,11 +42,11 @@ Modes:
   system → installs to /usr/local (requires sudo)
 
 This script will:
-  1. Download BashBard from GitHub
-  2. Install dependencies
-  3. Prompt for your Gemini API key (optional)
-  4. Configure .env automatically
-  5. Create the BashBard launcher (and a lowercase alias)
+  1) Download BashBard
+  2) Install dependencies
+  3) Configure .env (prompt if interactive)
+  4) Create launchers (BashBard + bashbard)
+  5) Ensure a shim/symlink is placed in a directory already on your $PATH so you can run it immediately
 USAGE
 }
 
@@ -66,7 +61,8 @@ esac
 command -v git >/dev/null 2>&1 || error "git not found. Please install git."
 PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || error "Python 3 not found. Please install it first."
-command -v "$PY" >/dev/null 2>&1 || error "pip not found for $PY. Try: $PY -m ensurepip --upgrade"
+# ensure pip exists for this Python
+"$PY" -m pip --version >/dev/null 2>&1 || "$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
 
 info "Using Python: $("$PY" -c 'import sys; print(sys.executable)')"
 info "Pip version:  $("$PY" -m pip --version || echo 'unknown')"
@@ -75,8 +71,6 @@ info "Pip version:  $("$PY" -m pip --version || echo 'unknown')"
 info "Downloading BashBard from GitHub..."
 git clone --depth=1 "$REPO_URL" "$TMP_DIR" >/dev/null 2>&1 || error "Failed to clone repository."
 SRC_DIR="$TMP_DIR"
-
-# Allow either layout: repo root has package dir "BashBard"
 [[ -d "$SRC_DIR/BashBard" ]] || error "Repository structure invalid (missing BashBard/ directory)."
 
 # --- Install paths ---
@@ -84,7 +78,7 @@ if [[ "$MODE" == "system" ]]; then
   INSTALL_ROOT="/usr/local/share/bashbard"
   BIN_DIR="/usr/local/bin"
   SUDO="sudo"
-  PIP_USER_FLAG=()   # system-wide install
+  PIP_USER_FLAG=()
 else
   INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/bashbard"
   BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
@@ -92,10 +86,10 @@ else
   PIP_USER_FLAG=(--user)
 fi
 
-BIN_PATH="$BIN_DIR/BashBard"
-BIN_PATH_LOWER="$BIN_DIR/bashbard"
+BIN_MAIN="$BIN_DIR/BashBard"
+BIN_LOWER="$BIN_DIR/bashbard"
 
-# --- Create install dirs and copy files ---
+# --- Copy package ---
 info "Installing BashBard package to: $INSTALL_ROOT"
 $SUDO mkdir -p "$INSTALL_ROOT"
 $SUDO rm -rf "$INSTALL_ROOT/BashBard"
@@ -113,9 +107,7 @@ if [[ -f "$REQ_FILE" ]]; then
   fi
   DEP_STATUS=$?
   set -e
-  if [[ $DEP_STATUS -ne 0 ]]; then
-    warn "Some dependencies failed or had version conflicts; continuing..."
-  fi
+  [[ $DEP_STATUS -eq 0 ]] || warn "Some dependencies failed or had version conflicts; continuing..."
 else
   warn "No requirements.txt found — skipping dependency install."
 fi
@@ -123,7 +115,6 @@ fi
 # --- .env setup ---
 ENV_PATH="$INSTALL_ROOT/.env"
 info "Configuring BashBard environment..."
-
 if [[ ! -f "$ENV_PATH" ]]; then
   $SUDO bash -c "cat > '$ENV_PATH' <<'EOF'
 # Agentic BashBard environment configuration
@@ -144,17 +135,16 @@ else
   warn ".env already exists — keeping existing values."
 fi
 
-# --- Request Gemini API key (only if interactive) ---
+# Optional key prompt only if interactive
 if [[ -t 0 && -t 1 ]]; then
   echo ""
   read -rp "🔑 Enter your Google Gemini API key (or press Enter to skip): " GEMINI_KEY || true
   if [[ -n "${GEMINI_KEY:-}" ]]; then
-    # Use env-safe edit
     $SUDO awk -v key="$GEMINI_KEY" '
-      BEGIN {done=0}
-      /^GOOGLE_API_KEY=/ {print "GOOGLE_API_KEY=" key; done=1; next}
+      BEGIN{done=0}
+      /^GOOGLE_API_KEY=/{print "GOOGLE_API_KEY=" key; done=1; next}
       {print}
-      END {if (!done) print "GOOGLE_API_KEY=" key}
+      END{if(!done) print "GOOGLE_API_KEY=" key}
     ' "$ENV_PATH" | $SUDO tee "$ENV_PATH.tmp" >/dev/null
     $SUDO mv "$ENV_PATH.tmp" "$ENV_PATH"
     success "Gemini API key saved to $ENV_PATH"
@@ -165,11 +155,10 @@ else
   warn "Non-interactive shell detected, skipping API key prompt. Edit $ENV_PATH later."
 fi
 
-# --- Launcher creation ---
+# --- Launcher template ---
 LAUNCHER='#!/usr/bin/env bash
 set -euo pipefail
 PKG_PARENT="__PKG_PARENT__"
-# Ensure the package directory is importable
 if [[ -n "${PYTHONPATH:-}" ]]; then
   export PYTHONPATH="$PKG_PARENT:$PYTHONPATH"
 else
@@ -177,34 +166,80 @@ else
 fi
 exec /usr/bin/env python3 -m BashBard "$@"'
 
+# --- Create launchers in BIN_DIR ---
 info "Creating launcher(s) in: $BIN_DIR"
 $SUDO mkdir -p "$BIN_DIR"
+printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" | $SUDO tee "$BIN_MAIN" >/dev/null
+$SUDO chmod 0755 "$BIN_MAIN"
 
-# Main launcher (Capitalized)
-printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" | $SUDO tee "$BIN_PATH" >/dev/null
-$SUDO chmod 0755 "$BIN_PATH"
-
-# Convenience lowercase symlink (or wrapper if symlinks not allowed)
-if $SUDO ln -sf "BashBard" "$BIN_PATH_LOWER" 2>/dev/null; then
-  :
-else
-  # Fallback wrapper
-  $SUDO bash -c "cat > '$BIN_PATH_LOWER' <<'EOW'
+# lowercase convenience (symlink or wrapper)
+if $SUDO ln -sf "BashBard" "$BIN_LOWER" 2>/dev/null; then :; else
+  $SUDO bash -c "cat > '$BIN_LOWER' <<'EOW'
 #!/usr/bin/env bash
 exec BashBard \"\$@\"
 EOW"
-  $SUDO chmod 0755 "$BIN_PATH_LOWER"
+  $SUDO chmod 0755 "$BIN_LOWER"
 fi
 
-# --- PATH check (user mode only) ---
-if [[ "$MODE" != "system" ]]; then
-  # Update PATH for current session
-  case ":$PATH:" in
-    *":$BIN_DIR:"*) : ;;
-    *) export PATH="$BIN_DIR:$PATH"; success "Added $BIN_DIR to PATH for this session." ;;
-  esac
+# --- Ensure command works *immediately* in this shell ---
+# Strategy:
+# 1) If BIN_DIR is already on PATH -> done.
+# 2) Else, if /usr/local/bin is writable (or via sudo) and in PATH -> create global symlinks there.
+# 3) Else, find the first writable directory already on PATH and drop shims there.
+# 4) Also try to persist ~/.local/bin in rc files for future sessions (user mode only).
 
-  # Persist in common shells
+is_on_path() { case ":$PATH:" in *":$1:"*) return 0;; *) return 1;; esac; }
+
+make_shim() {
+  local target="$1" dest_dir="$2" name="$3"
+  mkdir -p "$dest_dir" 2>/dev/null || true
+  if ln -sf "$target" "$dest_dir/$name" 2>/dev/null; then
+    :
+  else
+    # wrapper if symlink not allowed
+    cat > "$dest_dir/$name" <<EOF
+#!/usr/bin/env bash
+exec "$target" "\$@"
+EOF
+    chmod 0755 "$dest_dir/$name"
+  fi
+}
+
+activate_now=false
+
+# 1) If BIN_DIR already on PATH, we’re good
+if is_on_path "$BIN_DIR"; then
+  activate_now=true
+else
+  # 2) Try /usr/local/bin (commonly on PATH)
+  if is_on_path "/usr/local/bin"; then
+    # try without sudo; if fails and we have sudo in system mode, try with sudo
+    if ln -sf "$BIN_MAIN" "/usr/local/bin/BashBard" 2>/dev/null && ln -sf "$BIN_MAIN" "/usr/local/bin/bashbard" 2>/dev/null; then
+      activate_now=true
+    elif [[ "$MODE" == "system" ]]; then
+      $SUDO ln -sf "$BIN_MAIN" "/usr/local/bin/BashBard" 2>/dev/null || true
+      $SUDO ln -sf "$BIN_MAIN" "/usr/local/bin/bashbard" 2>/dev/null || true
+      [[ -x "/usr/local/bin/BashBard" ]] && activate_now=true
+    fi
+  fi
+
+  # 3) If still not active, find the first writable dir already on PATH
+  if ! $activate_now; then
+    IFS=':' read -r -a path_dirs <<< "$PATH"
+    for d in "${path_dirs[@]}"; do
+      [[ -z "$d" ]] && continue
+      if [[ -d "$d" && -w "$d" && -x "$d" ]]; then
+        make_shim "$BIN_MAIN" "$d" "BashBard"
+        make_shim "$BIN_MAIN" "$d" "bashbard"
+        activate_now=true
+        break
+      fi
+    done
+  fi
+fi
+
+# 4) Persist user PATH for future shells (user mode only)
+if [[ "$MODE" != "system" ]]; then
   persist_line='export PATH="$HOME/.local/bin:$PATH"'
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     if [[ -f "$rc" ]]; then
@@ -213,16 +248,19 @@ if [[ "$MODE" != "system" ]]; then
         success "Added ~/.local/bin to PATH in $rc"
       fi
     else
-      # create minimal rc if none exists
       echo "$persist_line" >> "$rc" 2>/dev/null || true
     fi
   done
 fi
 
-# --- Verification hints ---
 echo ""
 success "BashBard installed successfully!"
-echo -e "${CYAN}💡 Try running:${RESET}  BashBard --help"
-echo -e "${CYAN}💡 Or lowercase:${RESET}  bashbard --help"
+if $activate_now; then
+  echo -e "${CYAN}💡 You can run now:${RESET}  BashBard --help    ${CYAN}or${RESET}  bashbard --help"
+else
+  warn "Could not place a shim in a directory already on your current PATH."
+  echo -e "${CYAN}👉 Run by absolute path:${RESET}  $BIN_MAIN --help"
+  echo -e "${CYAN}👉 Or export PATH for this shell:${RESET}  export PATH=\"$BIN_DIR:\$PATH\""
+fi
 echo ""
 success "Installation complete."
