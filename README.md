@@ -123,14 +123,19 @@ BashBard is engineered with a modular architecture built on modern AI and system
 
 ```
 BashBard/
-├── cli.py          → Command-line entry & argument parsing
-├── terminal.py     → PTY AI-powered interactive shell
-├── llm.py          → AI provider (Gemini / OpenAI)
-├── nodes.py        → LangGraph nodes for AI actions
-├── safety.py       → Danger detection & safety logic
-├── graph.py        → Graph orchestration
-├── state.py        → State management
-└── ux.py           → Rich text & user interface helpers
+├── BashBard
+│   ├── cli.py             → Command-line entry & argument parsing
+│   ├── daemon_client.py   → Client API for communicating with the daemon
+│   ├── daemon.py          → (Optional) background service for socket-based integrations
+│   ├── graph.py           → Graph orchestration
+│   ├── llm.py             → AI provider (Gemini / OpenAI)
+│   ├── nodes.py           → LangGraph nodes for AI actions
+│   ├── safety.py          → Danger detection & safety logic
+│   ├── state.py           → State management
+│   ├── terminal.py        → PTY AI-powered interactive shell
+│   └── ux.py              → User experience helpers (colorized output, labels, banners)
+├── requirements.txt       → Python dependencies
+├── install.sh             → Automated installer (venv + .env + dependencies)
 ```
 
 **Core engine:** `terminal.py` runs the real-time AI terminal.
