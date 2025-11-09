@@ -16,7 +16,7 @@ umask 022
 REPO_URL="https://github.com/5afagy/BashBard.git"
 TMP_DIR="$(mktemp -d -t bashbard-install-XXXXXX)"
 
-# Colors
+# Colors & helpers
 GREEN=$'\033[1;32m'; YELLOW=$'\033[1;33m'; RED=$'\033[1;31m'; CYAN=$'\033[1;36m'; RESET=$'\033[0m'
 info()    { echo -e "${CYAN}➡${RESET} $*"; }
 warn()    { echo -e "${YELLOW}⚠${RESET} $*"; }
@@ -34,13 +34,13 @@ Modes:
   user   → installs to ~/.local (default)
   system → installs to /usr/local (requires sudo)
 
-This installer:
-  1) Downloads BashBard
-  2) Installs dependencies
-  3) Writes .env (prompts if interactive)
-  4) Creates launchers (BashBard + bashbard)
-  5) Adds a shim to a dir already on $PATH when possible
-  6) If API key missing, launcher will prompt on first run and save it
+What this does:
+  1) Download BashBard
+  2) Install dependencies
+  3) Configure .env (prompts if interactive)
+  4) Create launchers (BashBard + bashbard)
+  5) Tries to make it runnable immediately (shim in PATH if possible)
+  6) If API key missing, launcher prompts on first run and saves it
 USAGE
 }
 
@@ -107,6 +107,7 @@ fi
 ENV_PATH="$INSTALL_ROOT/.env"
 info "Configuring BashBard environment..."
 if [[ ! -f "$ENV_PATH" ]]; then
+  $SUDO bash -c "mkdir -p '$(dirname "$ENV_PATH")'"
   $SUDO bash -c "cat > '$ENV_PATH' <<'EOF'
 # Agentic BashBard environment configuration
 # Automatically generated during installation
@@ -136,8 +137,8 @@ if [[ -t 0 && -t 1 ]]; then
       /^GOOGLE_API_KEY=/{print "GOOGLE_API_KEY=" key; done=1; next}
       {print}
       END{if(!done) print "GOOGLE_API_KEY=" key}
-    ' "$ENV_PATH" | $SUDO tee "$ENV_PATH" >/dev/null
-    $SUDO mv "$ENV_PATH" "$ENV_PATH"
+    ' "$ENV_PATH" | $SUDO tee "$ENV_PATH.tmp" >/dev/null
+    $SUDO mv "$ENV_PATH.tmp" "$ENV_PATH"
     success "Gemini API key saved to $ENV_PATH"
   else
     warn "No API key entered during install; launcher will prompt on first run."
@@ -146,7 +147,7 @@ else
   warn "Non-interactive install; launcher will prompt for API key on first run."
 fi
 
-# Launcher with first-run API prompt (safe single-quoted heredoc)
+# Launcher with first-run API prompt + FIX: ensure parent dir exists
 LAUNCHER='#!/usr/bin/env bash
 set -euo pipefail
 
@@ -160,6 +161,9 @@ else
   export PYTHONPATH="$PKG_PARENT"
 fi
 
+# --- FIX: ensure .env parent directory exists ---
+mkdir -p "$(dirname "$ENV_PATH")"
+
 read_env_key() {
   [[ -f "$ENV_PATH" ]] || return 1
   grep -m1 "^GOOGLE_API_KEY=" "$ENV_PATH" | cut -d"=" -f2-
@@ -172,7 +176,7 @@ write_env_key() {
     /^GOOGLE_API_KEY=/{print \"GOOGLE_API_KEY=\" key; done=1; next}
     {print}
     END{if(!done) print \"GOOGLE_API_KEY=\" key}
-  " \"$ENV_PATH\" > \"$ENV_PATH\" && mv \"$ENV_PATH\" \"$ENV_PATH\"
+  " \"$ENV_PATH\" > \"$ENV_PATH.tmp\" && mv \"$ENV_PATH.tmp\" \"$ENV_PATH\"
 }
 
 prompt_key() {
