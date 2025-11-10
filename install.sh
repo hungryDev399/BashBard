@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # ==========================================================
-#  BashBard Installer (PEP 668/Kali-safe)
-#  AI Assistant for Shell Automation and Command Correction
+#  BashBard Installer — Ultra-hardened, PEP 668-safe, all-in-one
+#  Handles: Kali/Debian externally-managed envs, missing venv, missing git,
+#           offline fallbacks (tarball), non-interactive shells, secure .env,
+#           ModuleNotFound errors, PATH shims, sudo/su detection, fish/zsh,
+#           provider selection via env, preseeded keys, and more.
 #  Author: Khafagy | Co-Developer: Naggar
-#  Maintainer of this fix: (installer rewrite w/ venv)
+#  Maintainer of this fix: (installer rewrite w/ venv + .pth)
 #  License: Apache 2.0
 # ==========================================================
 
@@ -12,202 +15,279 @@ if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 umask 022
 
-REPO_URL="https://github.com/5afagy/BashBard.git"
-TMP_DIR="$(mktemp -d -t bashbard-install-XXXXXX)"
-trap '[[ -d "${TMP_DIR:-}" ]] && rm -rf "$TMP_DIR"' EXIT
+# ------- Configuration (override via env) ------------------------------------
+REPO_URL="${BASHBARD_REPO_URL:-https://github.com/5afagy/BashBard}"
+REPO_REF="${BASHBARD_REPO_REF:-refs/heads/main}"   # can be refs/tags/vX.Y.Z
+INSTALL_MODE="${1:-${BASHBARD_MODE:-user}}"       # user|system
+NONINTERACTIVE="${BASHBARD_NONINTERACTIVE:-}"     # set to 1 to skip prompts
+PY_BIN="${PYTHON:-python3}"
 
-# Colors + helpers
-GREEN=$'\033[1;32m'; YELLOW=$'\033[1;33m'; RED=$'\033[1;31m'; CYAN=$'\033[1;36m'; RESET=$'\033[0m'
+# Provider defaults (can be overridden via env before first run)
+DEFAULT_LLM_PROVIDER="${LLM_PROVIDER:-google}"
+DEFAULT_GOOGLE_MODEL="${GOOGLE_MODEL:-gemini-2.5-flash-lite}"
+DEFAULT_OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}"
+PRESEEDED_GOOGLE_KEY="${GOOGLE_API_KEY:-}"
+PRESEEDED_OPENAI_KEY="${OPENAI_API_KEY:-}"
+
+# ------- UI helpers ----------------------------------------------------------
+GREEN=$'[1;32m'; YELLOW=$'[1;33m'; RED=$'[1;31m'; CYAN=$'[1;36m'; RESET=$'[0m'
 info(){ echo -e "${CYAN}➡${RESET} $*"; }
 warn(){ echo -e "${YELLOW}⚠${RESET} $*"; }
 error(){ echo -e "${RED}❌${RESET} $*" >&2; exit 1; }
 success(){ echo -e "${GREEN}✅${RESET} $*"; }
 
-# Usage
-usage() {
-  cat <<'USAGE'
+usage(){ cat <<'USAGE'
 Usage:
   ./install.sh [user|system]
 
-Modes:
-  user   → installs to ~/.local (default)
-  system → installs to /usr/local (requires sudo or su)
+Env overrides (optional):
+  BASHBARD_MODE=user|system
+  BASHBARD_NONINTERACTIVE=1   (skip prompts)
+  BASHBARD_REPO_URL=...
+  BASHBARD_REPO_REF=refs/tags/vX.Y.Z
+  PYTHON=/path/to/python3
+  LLM_PROVIDER=google|openai
+  GOOGLE_API_KEY=...  OPENAI_API_KEY=...
+  GOOGLE_MODEL=...    OPENAI_MODEL=...
+
+Examples:
+  curl -sSL https://github.com/5afagy/BashBard/raw/refs/heads/main/install.sh | bash
+  BASHBARD_NONINTERACTIVE=1 bash install.sh system
 USAGE
 }
 
-MODE="${1:-user}"
-case "$MODE" in
+case "$INSTALL_MODE" in
   user|system) ;;
   -h|--help|help) usage; exit 0 ;;
-  *) warn "Unknown mode '$MODE' — defaulting to 'user'"; MODE="user" ;;
+  *) warn "Unknown mode '$INSTALL_MODE' — defaulting to 'user'"; INSTALL_MODE=user ;;
 esac
 
-# Elevation helper
-_elev=""
-if command -v sudo >/dev/null 2>&1; then
-  _elev="sudo"
-elif command -v su >/dev/null 2>&1; then
-  _elev="su -c"
-fi
+# ------- Elevation & package manager detection --------------------------------
+ELEV=""; if command -v sudo >/dev/null 2>&1; then ELEV="sudo"; elif command -v su >/dev/null 2>&1; then ELEV="su -c"; fi
+pkg_install(){
+  # $1 = packages...
+  local pkgs=("$@")
+  if command -v apt-get >/dev/null 2>&1; then
+    [[ -n "$ELEV" ]] || error "Need privileges to install: ${pkgs[*]}";
+    $ELEV apt-get update -y && $ELEV apt-get install -y "${pkgs[@]}"
+  elif command -v dnf >/dev/null 2>&1; then
+    [[ -n "$ELEV" ]] || error "Need privileges to install: ${pkgs[*]}";
+    $ELEV dnf install -y "${pkgs[@]}"
+  elif command -v yum >/dev/null 2>&1; then
+    [[ -n "$ELEV" ]] || error "Need privileges to install: ${pkgs[*]}";
+    $ELEV yum install -y "${pkgs[@]}"
+  elif command -v pacman >/dev/null 2>&1; then
+    [[ -n "$ELEV" ]] || error "Need privileges to install: ${pkgs[*]}";
+    $ELEV pacman -Sy --noconfirm "${pkgs[@]}"
+  else
+    error "Unsupported package manager; install these manually: ${pkgs[*]}"
+  fi
+}
 
-# Requirements
-command -v git >/dev/null 2>&1 || error "git not found."
-PY="${PYTHON:-python3}"
-command -v "$PY" >/dev/null 2>&1 || error "Python 3 not found."
-"$PY" -m pip --version >/dev/null 2>&1 || "$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
+# ------- Sanity checks --------------------------------------------------------
+command -v "$PY_BIN" >/dev/null 2>&1 || error "Python 3 not found. Set PYTHON=/path/to/python3"
+PY_VER=$("$PY_BIN" -c 'import sys;print("%d.%d"%sys.version_info[:2])')
+case "$PY_VER" in
+  3.[8-9]|3.1[0-9]|3.2[0-9]) : ;;  # >=3.8
+  *) warn "Python $PY_VER detected. Python >=3.8 is recommended." ;;
+esac
 
-info "Using Python: $("$PY" -c 'import sys; print(sys.executable)')"
-info "Pip version:  $("$PY" -m pip --version || echo 'unknown')"
+# ------- Temp dir & cleanup ---------------------------------------------------
+TMP_DIR="$(mktemp -d -t bashbard-install-XXXXXX)" || error "mktemp failed"
+cleanup(){ [[ -d "${TMP_DIR:-}" ]] && rm -rf "$TMP_DIR"; }
+trap cleanup EXIT
 
-# Clone source
-info "Downloading BashBard from GitHub..."
-git clone --depth=1 "$REPO_URL" "$TMP_DIR" >/dev/null 2>&1 || error "Failed to clone repository."
-[[ -d "$TMP_DIR/BashBard" ]] || error "Repository structure invalid (missing BashBard/)."
-
-# Layout per mode
-if [[ "$MODE" == "system" ]]; then
-  [[ -n "$_elev" ]] || error "Need elevated privileges but no sudo/su found."
+# ------- Resolve install paths ------------------------------------------------
+if [[ "$INSTALL_MODE" == "system" ]]; then
+  [[ -n "$ELEV" ]] || error "System mode requires sudo/su."
   INSTALL_ROOT="/usr/local/share/bashbard"
   BIN_DIR="/usr/local/bin"
 else
   INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/bashbard"
   BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 fi
-
 ENV_PATH="$INSTALL_ROOT/.env"
 VENV_DIR="$INSTALL_ROOT/venv"
 PY_VENV="$VENV_DIR/bin/python"
 PIP_VENV="$VENV_DIR/bin/pip"
 
-# Copy code
+# Ensure home/local dirs writable in user mode
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  [[ -w "${HOME}" ]] || error "Home directory not writable."
+fi
+
+# ------- Fetch source (git or tarball) ---------------------------------------
+fetch_source(){
+  local dest="$1"
+  info "Downloading BashBard from GitHub..."
+  if command -v git >/dev/null 2>&1; then
+    git clone --depth=1 "$REPO_URL" "$dest" >/dev/null 2>&1 || true
+    if [[ ! -d "$dest/BashBard" ]]; then
+      warn "git clone failed or layout unexpected; falling back to tarball."
+    else
+      return 0
+    fi
+  fi
+  # Tarball fallback (no git needed)
+  local tar_url="https://codeload.github.com/$(echo "$REPO_URL" | sed -E 's#https?://github.com/##')/tar.gz/${REPO_REF}"
+  curl -fsSL "$tar_url" -o "$dest.tar.gz" || error "Failed to download tarball."
+  mkdir -p "$dest.extracted"
+  tar -xzf "$dest.tar.gz" -C "$dest.extracted" || error "Failed to extract tarball."
+  # The archive root is like BashBard-<hash>/*
+  local inner; inner=$(find "$dest.extracted" -maxdepth 1 -type d -name 'BashBard-*' | head -n1)
+  [[ -n "$inner" ]] || error "Unexpected tarball structure."
+  cp -a "$inner"/* "$dest" || error "Copy from tarball failed."
+}
+
+fetch_source "$TMP_DIR"
+[[ -d "$TMP_DIR/BashBard" ]] || error "Repository structure invalid (missing BashBard/)."
+
+# ------- Copy code to INSTALL_ROOT -------------------------------------------
 info "Installing BashBard package to: $INSTALL_ROOT"
-if [[ "$MODE" == "system" ]]; then
-  $_elev mkdir -p "$INSTALL_ROOT"
-  $_elev rm -rf "$INSTALL_ROOT/BashBard"
-  $_elev cp -a "$TMP_DIR/BashBard" "$INSTALL_ROOT/"
+if [[ "$INSTALL_MODE" == "system" ]]; then
+  $ELEV mkdir -p "$INSTALL_ROOT"
+  $ELEV rm -rf "$INSTALL_ROOT/BashBard"
+  $ELEV cp -a "$TMP_DIR/BashBard" "$INSTALL_ROOT/"
 else
   mkdir -p "$INSTALL_ROOT"
   rm -rf "$INSTALL_ROOT/BashBard"
   cp -a "$TMP_DIR/BashBard" "$INSTALL_ROOT/"
 fi
 
-# Create/upgrade virtualenv — ALWAYS use venv to avoid PEP 668 issues
-create_venv() {
+# ------- Create virtualenv (always; PEP 668 safe) ----------------------------
+create_venv(){
   local py="$1" venv_dir="$2"
-  if [[ "$MODE" == "system" ]]; then
-    $_elev "$py" -m venv "$venv_dir" || return 1
-    $_elev "$venv_dir/bin/python" -m pip install --upgrade pip || true
+  if [[ "$INSTALL_MODE" == "system" ]]; then
+    $ELEV "$py" -m venv "$venv_dir" || return 1
+    $ELEV "$venv_dir/bin/python" -m pip install --upgrade pip setuptools wheel || true
   else
     "$py" -m venv "$venv_dir" || return 1
-    "$venv_dir/bin/python" -m pip install --upgrade pip || true
+    "$venv_dir/bin/python" -m pip install --upgrade pip setuptools wheel || true
   fi
 }
 
 info "Creating/upgrading virtual environment at: $VENV_DIR"
-if ! create_venv "$PY" "$VENV_DIR"; then
-  # Detect classic Debian/Ubuntu/Kali missing python3-venv
-  if "$PY" -m pip -V >/dev/null 2>&1; then :; fi
-  warn "Could not create venv. Your system may be missing the python3-venv package (PEP 668-safe environments)."
-  if [[ "$MODE" == "system" && -n "$_elev" && ( -x /usr/bin/apt || -x /bin/apt ) ]]; then
-    warn "Attempting to install python3-venv using apt (requires privileges)."
-    if $_elev apt-get update -y >/dev/null 2>&1 && $_elev apt-get install -y python3-venv >/dev/null 2>&1; then
-      info "python3-venv installed. Retrying venv creation..."
-      create_venv "$PY" "$VENV_DIR" || error "Virtualenv creation still failing. Aborting."
-    else
-      error "Failed to install python3-venv via apt. Please install it and re-run."
-    fi
+if ! create_venv "$PY_BIN" "$VENV_DIR"; then
+  warn "Could not create venv — likely missing python3-venv."
+  if command -v apt-get >/dev/null 2>&1; then
+    [[ "$INSTALL_MODE" == "system" ]] || warn "You may need system mode to install python3-venv."
+    pkg_install python3-venv
+    info "Retrying virtualenv creation..."
+    create_venv "$PY_BIN" "$VENV_DIR" || error "Virtualenv creation still failing."
   else
-    error $'Venv creation failed. On Debian/Ubuntu/Kali, install python3-venv (or pypy3-venv) and re-run.\nSee: /usr/share/doc/python3*/README.venv'
+    error "Install your distro's Python venv package and re-run."
   fi
 fi
 
-# Install dependencies into venv (never system pip)
+# ------- Install Python deps into venv ---------------------------------------
 REQ_FILE="$TMP_DIR/requirements.txt"
 if [[ -f "$REQ_FILE" ]]; then
   info "Installing dependencies into venv..."
   set +e
-  if [[ "$MODE" == "system" ]]; then
-    $_elev "$PY_VENV" -m pip install -r "$REQ_FILE" --no-warn-script-location
+  if [[ "$INSTALL_MODE" == "system" ]]; then
+    $ELEV "$PY_VENV" -m pip install -r "$REQ_FILE" --no-warn-script-location
   else
     "$PY_VENV" -m pip install -r "$REQ_FILE" --no-warn-script-location
   fi
   RC=$?; set -e
-  if [[ $RC -ne 0 ]]; then
-    error $'Failed to install one or more dependencies into the virtualenv.\nThis installer avoids system pip per PEP 668; please review the error above.'
-  fi
+  [[ $RC -eq 0 ]] || error $'Failed to install one or more dependencies into the virtualenv.\n(We never use system pip per PEP 668.)'
 else
   warn "No requirements.txt; skipping dependency install."
 fi
 
-# .env handling — secure perms and hidden input
-info "Configuring BashBard environment..."
-mkdir -p "$(dirname "$ENV_PATH")" 2>/dev/null || true
-if [[ ! -f "$ENV_PATH" ]]; then
-  # create with 600 regardless of umask
-  if [[ "$MODE" == "system" ]]; then
-    $_elev install -m 600 /dev/null "$ENV_PATH"
-    $_elev bash -c "cat > '$ENV_PATH' <<'EOF'
-# Agentic BashBard environment configuration
-# Automatically generated during installation
-LLM_PROVIDER=google
-GOOGLE_API_KEY=
-GOOGLE_MODEL=gemini-2.5-flash-lite
-DRY_RUN=0
-EOF"
-    $_elev chmod 600 "$ENV_PATH" || true
+# ------- Ensure module importability (.pth + launcher PYTHONPATH) -------------
+# Add INSTALL_ROOT to venv site-packages via .pth (persistent)
+SITE_PKGS=$("$PY_VENV" - <<'PY'
+import sysconfig,sys
+print(sysconfig.get_paths().get('purelib') or sysconfig.get_paths().get('platlib') or '')
+PY
+)
+if [[ -n "$SITE_PKGS" && -d "$SITE_PKGS" ]]; then
+  PTH_FILE="$SITE_PKGS/bashbard_install_root.pth"
+  if [[ "$INSTALL_MODE" == "system" ]]; then
+    echo "$INSTALL_ROOT" | $ELEV tee "$PTH_FILE" >/dev/null
   else
-    install -m 600 /dev/null "$ENV_PATH"
-    cat > "$ENV_PATH" <<'EOF'
-# Agentic BashBard environment configuration
-# Automatically generated during installation
-LLM_PROVIDER=google
-GOOGLE_API_KEY=
-GOOGLE_MODEL=gemini-2.5-flash-lite
-DRY_RUN=0
-EOF
-    chmod 600 "$ENV_PATH" || true
+    echo "$INSTALL_ROOT" > "$PTH_FILE"
   fi
-  success "Created .env at $ENV_PATH (0600)"
+  info "Linked site-packages via .pth: $PTH_FILE"
 else
-  if [[ "$MODE" == "system" ]]; then $_elev chmod 600 "$ENV_PATH" || true; else chmod 600 "$ENV_PATH" || true; fi
-  warn ".env already exists — keeping existing values (permissions set to 0600)."
+  warn "Could not determine site-packages; relying on launcher PYTHONPATH."
 fi
 
-# Prompt during install only if interactive; otherwise defer to first run
-if [[ -t 0 && -t 1 ]]; then
-  echo ""
-  read -srp "🔑 Enter your Google Gemini API key (or press Enter to skip): " GEMINI_KEY || true
-  echo ""
-  if [[ -n "${GEMINI_KEY:-}" ]]; then
-    # Safe in-place update of GOOGLE_API_KEY
-    if [[ "$MODE" == "system" ]]; then
-      $_elev awk -v key="$GEMINI_KEY" '
-        BEGIN{done=0}
-        /^GOOGLE_API_KEY=/{print "GOOGLE_API_KEY=" key; done=1; next}
-        {print}
-        END{if(!done) print "GOOGLE_API_KEY=" key}
-      ' "$ENV_PATH" | $_elev tee "$ENV_PATH.tmp" >/dev/null
-      $_elev mv "$ENV_PATH.tmp" "$ENV_PATH"
-      $_elev chmod 600 "$ENV_PATH" || true
+# ------- Secure .env (0600) & optional preseeded keys ------------------------
+info "Configuring BashBard environment..."
+mkdir -p "$(dirname "$ENV_PATH")" 2>/dev/null || true
+emit_env(){
+  cat <<EOF
+# Agentic BashBard environment configuration
+# Automatically generated during installation
+LLM_PROVIDER=${DEFAULT_LLM_PROVIDER}
+GOOGLE_API_KEY=${PRESEEDED_GOOGLE_KEY}
+GOOGLE_MODEL=${DEFAULT_GOOGLE_MODEL}
+OPENAI_API_KEY=${PRESEEDED_OPENAI_KEY}
+OPENAI_MODEL=${DEFAULT_OPENAI_MODEL}
+# If set to 1, commands are not executed (dry-run)
+DRY_RUN=0
+EOF
+}
+
+create_or_update_env(){
+  if [[ ! -f "$ENV_PATH" ]]; then
+    if [[ "$INSTALL_MODE" == "system" ]]; then
+      $ELEV install -m 600 /dev/null "$ENV_PATH"
+      emit_env | $ELEV tee "$ENV_PATH" >/dev/null
+      $ELEV chmod 600 "$ENV_PATH" || true
     else
+      install -m 600 /dev/null "$ENV_PATH"
+      emit_env > "$ENV_PATH"
+      chmod 600 "$ENV_PATH" || true
+    fi
+    success "Created .env at $ENV_PATH (0600)"
+  else
+    if [[ "$INSTALL_MODE" == "system" ]]; then $ELEV chmod 600 "$ENV_PATH" || true; else chmod 600 "$ENV_PATH" || true; fi
+    warn ".env already exists — keeping existing values (permissions set to 0600)."
+  fi
+}
+create_or_update_env
+
+# Prompt key if interactive and not preseeded
+if [[ -z "${NONINTERACTIVE}" && -t 0 && -t 1 ]]; then
+  need_google=""; need_openai=""
+  # shellcheck disable=SC1090
+  . "$ENV_PATH" || true
+  [[ -z "${GOOGLE_API_KEY:-}" && "${LLM_PROVIDER:-$DEFAULT_LLM_PROVIDER}" == "google" ]] && need_google=1
+  [[ -z "${OPENAI_API_KEY:-}" && "${LLM_PROVIDER:-$DEFAULT_LLM_PROVIDER}" == "openai" ]] && need_openai=1
+  if [[ -n "$need_google" ]]; then
+    echo ""
+    read -srp "🔑 Enter your Google Gemini API key (or press Enter to skip): " GEMINI_KEY || true; echo ""
+    if [[ -n "${GEMINI_KEY:-}" ]]; then
       awk -v key="$GEMINI_KEY" '
         BEGIN{done=0}
         /^GOOGLE_API_KEY=/{print "GOOGLE_API_KEY=" key; done=1; next}
         {print}
         END{if(!done) print "GOOGLE_API_KEY=" key}
-      ' "$ENV_PATH" > "$ENV_PATH.tmp"
-      mv "$ENV_PATH.tmp" "$ENV_PATH"
-      chmod 600 "$ENV_PATH" || true
+      ' "$ENV_PATH" > "$ENV_PATH.tmp" && mv "$ENV_PATH.tmp" "$ENV_PATH" && chmod 600 "$ENV_PATH" || true
+      success "Gemini API key saved to $ENV_PATH"
     fi
-    success "Gemini API key saved to $ENV_PATH"
-  else
-    warn "No API key entered now; launcher will prompt on first run."
+  fi
+  if [[ -n "$need_openai" ]]; then
+    echo ""
+    read -srp "🔑 Enter your OpenAI API key (or press Enter to skip): " OAI_KEY || true; echo ""
+    if [[ -n "${OAI_KEY:-}" ]]; then
+      awk -v key="$OAI_KEY" '
+        BEGIN{done=0}
+        /^OPENAI_API_KEY=/{print "OPENAI_API_KEY=" key; done=1; next}
+        {print}
+        END{if(!done) print "OPENAI_API_KEY=" key}
+      ' "$ENV_PATH" > "$ENV_PATH.tmp" && mv "$ENV_PATH.tmp" "$ENV_PATH" && chmod 600 "$ENV_PATH" || true
+      success "OpenAI API key saved to $ENV_PATH"
+    fi
   fi
 else
-  warn "Non-interactive install; launcher will prompt for API key on first run."
+  warn "Non-interactive install; launcher will prompt for missing API keys on first run."
 fi
 
-# --- Hardened launcher (venv, hidden prompt, 0600) ---
+# ------- Launcher (venv + PYTHONPATH guard) ----------------------------------
 LAUNCHER='#!/usr/bin/env bash
 set -euo pipefail
 
@@ -232,78 +312,75 @@ if [[ ! -f "${ENV_PATH}" ]]; then
 LLM_PROVIDER=google
 GOOGLE_API_KEY=
 GOOGLE_MODEL=gemini-2.5-flash-lite
+OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4o-mini
 DRY_RUN=0
 EOF
   chmod 600 "${ENV_PATH}" || true
 fi
 
-get_key() {
-  grep -m1 "^GOOGLE_API_KEY=" "${ENV_PATH}" | cut -d"=" -f2- || true
-}
-
-set_key() {
-  local key="$1"
-  umask 177
-  awk -v key="$key" "
+get_key(){ grep -m1 "^${1}=" "${ENV_PATH}" | cut -d"=" -f2- || true; }
+set_kv(){
+  local k="$1" v="$2"; umask 177
+  awk -v k="$k" -v v="$v" '
     BEGIN{done=0}
-    /^GOOGLE_API_KEY=/{print \"GOOGLE_API_KEY=\" key; done=1; next}
+    $0 ~ ("^" k "="){print k "=" v; done=1; next}
     {print}
-    END{if(!done) print \"GOOGLE_API_KEY=\" key}
-  " "${ENV_PATH}" > "${ENV_PATH}.tmp"
-  mv "${ENV_PATH}.tmp" "${ENV_PATH}"
-  chmod 600 "${ENV_PATH}" || true
+    END{if(!done) print k "=" v}
+  ' "${ENV_PATH}" > "${ENV_PATH}.tmp"
+  mv "${ENV_PATH}.tmp" "${ENV_PATH}"; chmod 600 "${ENV_PATH}" || true
 }
 
-prompt_key() {
-  local dev=""
+prompt_secret(){
+  local msg="$1" dev=""
   if [[ -r /dev/tty && -w /dev/tty ]]; then dev=/dev/tty
   elif [[ -t 0 ]]; then dev=/dev/stdin
   else return 1
   fi
-  printf "🔑 Enter your Google Gemini API key: " >"$dev"
-  local input; IFS= read -rs input <"$dev" || true
-  printf "\n" >"$dev"
-  printf "%s" "$input"
+  printf "%s" "$msg" >"$dev"; local input; IFS= read -rs input <"$dev" || true; printf "\n" >"$dev"; printf "%s" "$input"
 }
 
-key="$(get_key)"
-if [[ -z "${key:-}" ]]; then
-  key="$(prompt_key || true)"
-  if [[ -n "${key:-}" ]]; then
-    set_key "$key"
-    echo "✅ Saved API key to ${ENV_PATH}"
-  else
-    echo "❌ GOOGLE_API_KEY is not set and no TTY available to prompt." >&2
-    echo "   Please edit: ${ENV_PATH}" >&2
-    exit 1
+# Export .env vars
+set -a; . "${ENV_PATH}"; set +a
+
+# Prompt missing API key for selected provider if interactive
+if [[ -t 0 && -t 1 ]]; then
+  if [[ "${LLM_PROVIDER:-google}" == "google" && -z "${GOOGLE_API_KEY:-}" ]]; then
+    key="$(prompt_secret "🔑 Enter your Google Gemini API key: " || true)"
+    if [[ -n "${key:-}" ]]; then set_kv GOOGLE_API_KEY "$key"; export GOOGLE_API_KEY="$key"; fi
+  elif [[ "${LLM_PROVIDER:-google}" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
+    key="$(prompt_secret "🔑 Enter your OpenAI API key: " || true)"
+    if [[ -n "${key:-}" ]]; then set_kv OPENAI_API_KEY "$key"; export OPENAI_API_KEY="$key"; fi
   fi
 fi
 
-# Export vars from .env
-set -a
-. "${ENV_PATH}"
-set +a
+# Guard: ensure module import visibility
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="${PKG_PARENT}:${PYTHONPATH}"
+else
+  export PYTHONPATH="${PKG_PARENT}"
+fi
 
-# Run using the venv interpreter
+# Run
 exec "${PY}" -m BashBard "$@"
 '
 
 info "Creating launcher(s) in: $BIN_DIR"
-if [[ "$MODE" == "system" ]]; then
-  $_elev mkdir -p "$BIN_DIR"
-  printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" | $_elev tee "$BIN_DIR/BashBard" >/dev/null
-  $_elev chmod 0755 "$BIN_DIR/BashBard"
+if [[ "$INSTALL_MODE" == "system" ]]; then
+  $ELEV mkdir -p "$BIN_DIR"
+  printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" | $ELEV tee "$BIN_DIR/BashBard" >/dev/null
+  $ELEV chmod 0755 "$BIN_DIR/BashBard"
 else
   mkdir -p "$BIN_DIR"
   printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" > "$BIN_DIR/BashBard"
   chmod 0755 "$BIN_DIR/BashBard"
 fi
 
-# Lowercase convenience (symlink or wrapper)
+# Lowercase convenience
 if ln -sf "BashBard" "$BIN_DIR/bashbard" 2>/dev/null; then :; else
-  if [[ "$MODE" == "system" ]]; then
-    $_elev bash -c "cat > '$BIN_DIR/bashbard' <<'EOW'\n#!/usr/bin/env bash\nexec BashBard \"\$@\"\nEOW"
-    $_elev chmod 0755 "$BIN_DIR/bashbard"
+  if [[ "$INSTALL_MODE" == "system" ]]; then
+    $ELEV bash -c "cat > '$BIN_DIR/bashbard' <<'EOW'\n#!/usr/bin/env bash\nexec BashBard \"\$@\"\nEOW"
+    $ELEV chmod 0755 "$BIN_DIR/bashbard"
   else
     cat > "$BIN_DIR/bashbard" <<'EOW'
 #!/usr/bin/env bash
@@ -313,42 +390,29 @@ EOW
   fi
 fi
 
-# Try to make runnable now via PATH, else suggest
-is_on_path(){ case ":$PATH:" in *":$1:"*) return 0;; *) return 1;; esac; }
-activate_now=false
-if is_on_path "$BIN_DIR"; then
-  activate_now=true
-else
-  # Try /usr/local/bin if writable
-  if is_on_path "/usr/local/bin"; then
-    if [[ "$MODE" == "system" ]]; then
-      $_elev ln -sf "$BIN_DIR/BashBard" "/usr/local/bin/BashBard" 2>/dev/null || true
-      $_elev ln -sf "$BIN_DIR/BashBard" "/usr/local/bin/bashbard" 2>/dev/null || true
-      [[ -x "/usr/local/bin/BashBard" ]] && activate_now=true
-    fi
-  fi
-fi
-
-# Persist PATH for future shells (user mode)
-if [[ "$MODE" != "system" ]]; then
+# PATH persistence for user mode (bash/zsh + fish)
+if [[ "$INSTALL_MODE" != "system" ]]; then
   persist_line='export PATH="$HOME/.local/bin:$PATH"'
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     if [[ -f "$rc" ]]; then
-      if ! grep -qs 'export PATH="$HOME/.local/bin:$PATH"' "$rc"; then
-        echo "$persist_line" >> "$rc"; success "Added ~/.local/bin to PATH in $rc"
-      fi
-    else
-      echo "$persist_line" >> "$rc" 2>/dev/null || true
-    fi
+      if ! grep -qs 'export PATH="$HOME/.local/bin:$PATH"' "$rc"; then echo "$persist_line" >> "$rc"; success "Added ~/.local/bin to PATH in $rc"; fi
+    else echo "$persist_line" >> "$rc" 2>/dev/null || true; fi
   done
+  # fish shell
+  if command -v fish >/dev/null 2>&1; then
+    mkdir -p "$HOME/.config/fish"; FISH_CFG="$HOME/.config/fish/config.fish"
+    if ! grep -qs "set -gx PATH \$HOME/.local/bin \$PATH" "$FISH_CFG" 2>/dev/null; then
+      echo "set -gx PATH \$HOME/.local/bin \$PATH" >> "$FISH_CFG"; success "Added ~/.local/bin to PATH in fish config"
+    fi
+  fi
 fi
 
 # Final messages
 echo ""
 success "BashBard installed successfully!"
-if $activate_now; then
+if command -v BashBard >/dev/null 2>&1 || command -v bashbard >/dev/null 2>&1; then
   echo -e "${CYAN}💡 Run now:${RESET}  BashBard --help  ${CYAN}or${RESET}  bashbard --help"
-  echo -e "${CYAN}💡 First run will prompt for API key if missing and save to:${RESET}  $ENV_PATH"
+  echo -e "${CYAN}💡 First run will prompt for missing API key(s) and save to:${RESET}  $ENV_PATH"
 else
   warn "Your current PATH may not include $BIN_DIR."
   echo -e "${CYAN}👉 Run by absolute path:${RESET}  $BIN_DIR/BashBard --help"
