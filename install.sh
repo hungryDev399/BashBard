@@ -4,21 +4,20 @@
 #  - Dedicated venv (no system site-packages)
 #  - Pip bootstrap: ensurepip → get-pip.py fallback
 #  - Works without git (tarball fallback)
-#  - Secure .env (0600) + resilient API-key prompt (TTY or visible fallback)
-#  - Installs UI extras (rich, prompt_toolkit)
+#  - Secure .env (0600) + resilient API-key prompt (TTY or visible)
+#  - UI extras (rich, prompt_toolkit)
 #  - Importability via .pth (+ PYTHONPATH safety net)
-#  - No commands inside [[ ]], no fragile pattern tests
+#  - No commands inside [[ ]], no fragile quoting
 #  - Supports user/system modes
 # ==========================================================
 
-# Re-exec with bash if invoked by sh/dash
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 umask 022
 
 # ---------- Config ----------
 REPO_URL="${BASHBARD_REPO_URL:-https://github.com/5afagy/BashBard}"
-REPO_REF="${BASHBARD_REPO_REF:-refs/heads/main}"   # e.g. refs/tags/vX.Y.Z
+REPO_REF="${BASHBARD_REPO_REF:-refs/heads/main}"   # e.g., refs/tags/vX.Y.Z
 TMP_DIR="$(mktemp -d -t bashbard-install-XXXXXX)"
 cleanup(){ [[ -d "${TMP_DIR:-}" ]] && rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
@@ -206,7 +205,7 @@ else
   warn "No requirements.txt; skipping dependency install."
 fi
 
-# ---------- UI extras (no pattern/glob conditions; no importlib.util) ----------
+# ---------- UI extras ----------
 info "Ensuring UI extras (rich, prompt_toolkit) are installed..."
 UI_MISSING_RAW="$("$PY_VENV" - <<'PY'
 mods = ["rich", "prompt_toolkit"]
@@ -223,7 +222,6 @@ while IFS= read -r line; do
     rich) UI_PKGS+=("rich>=13.9") ;;
     prompt_toolkit) UI_PKGS+=("prompt_toolkit>=3.0") ;;
     "" ) : ;;
-    * ) : ;;
   esac
 done <<< "$UI_MISSING_RAW"
 if (( ${#UI_PKGS[@]} )); then
@@ -266,6 +264,20 @@ else
   warn ".env already exists — keeping existing values (permissions set to 0600)."
 fi
 
+# ---------- Helper to upsert KEY=VALUE safely (awk) ----------
+set_kv_file() {
+  # $1=env_path  $2=KEY  $3=VALUE (may contain any chars)
+  local f="$1" k="$2" v="$3" tmp="${f}.tmp"
+  awk -v k="$k" -v v="$v" '
+    BEGIN{done=0}
+    $0 ~ "^"k"=" {print k"="v; done=1; next}
+    {print}
+    END{if(!done) print k"="v}
+  ' "$f" > "$tmp" || return 1
+  mv "$tmp" "$f"
+  chmod 600 "$f" 2>/dev/null || true
+}
+
 # ---------- Optional API-key prompt (interactive, resilient) ----------
 if [[ -t 0 && -t 1 ]]; then
   NEED_PROMPT="$("$PY" - <<PY
@@ -285,31 +297,14 @@ PY
   if [[ "$NEED_PROMPT" == "yes" ]]; then
     echo ""
     if [[ -r /dev/tty && -w /dev/tty ]]; then
-      # Hidden secure prompt via /dev/tty
       read -srp "🔑 Enter your Google Gemini API key (hidden): " GEMINI_KEY </dev/tty || true
       echo ""
     else
-      # Fallback visible prompt (Docker/CI/cloud shells)
       echo -n "🔑 Enter your Google Gemini API key (input visible): "
       read -r GEMINI_KEY || true
     fi
-
     if [[ -n "${GEMINI_KEY:-}" ]]; then
-      "$PY" - <<PY > "$ENV_PATH.tmp"
-p=r"""$ENV_PATH"""
-key="GOOGLE_API_KEY";val=r"""$GEMINI_KEY""".replace('"','\\"')
-try:
-  lines=open(p,'r',encoding='utf-8').read().splitlines()
-except FileNotFoundError:
-  lines=[]
-done=False; out=[]
-for ln in lines:
-  if ln.startswith(key+"="): out.append(f"{key}={val}"); done=True
-  else: out.append(ln)
-if not done: out.append(f"{key}={val}")
-open(p+'.tmp','w',encoding='utf-8').write("\n".join(out))
-PY
-      mv "$ENV_PATH.tmp" "$ENV_PATH"; chmod 600 "$ENV_PATH" || true
+      set_kv_file "$ENV_PATH" "GOOGLE_API_KEY" "$GEMINI_KEY" || warn "Failed to save key (awk)."
       success "Gemini API key saved to $ENV_PATH"
     else
       warn "No API key entered now; launcher will prompt on first run."
@@ -319,8 +314,11 @@ else
   warn "Non-interactive install; launcher will prompt for API key on first run."
 fi
 
-# ---------- Launcher ----------
-LAUNCHER='#!/usr/bin/env bash
+# ---------- Write launcher via heredoc (no fragile in-string quotes) ----------
+info "Creating launcher(s) in: $BIN_DIR"
+mkdir -p "$BIN_DIR"
+cat > "$BIN_MAIN" <<'LAUNCH'
+#!/usr/bin/env bash
 set -euo pipefail
 PKG_PARENT="__PKG_PARENT__"
 ENV_PATH="${PKG_PARENT}/.env"
@@ -345,24 +343,17 @@ EOF
   chmod 600 "${ENV_PATH}" || true
 fi
 
-set_kv(){
-  local k="$1" v="$2"
-  python3 - "$k" "$v" "${ENV_PATH}" <<'PY'
-import sys
-k, v, p = sys.argv[1], sys.argv[2].replace('"','\\"'), sys.argv[3]
-try: lines=open(p,"r",encoding="utf-8").read().splitlines()
-except FileNotFoundError: lines=[]
-done=False; out=[]
-for ln in lines:
-  if ln.startswith(k+"="):
-    out.append(f"{k}={v}"); done=True
-  else:
-    out.append(ln)
-if not done: out.append(f"{k}={v}")
-open(p+".tmp","w",encoding="utf-8").write("\\n".join(out))
-PY
-  mv "${ENV_PATH}.tmp" "${ENV_PATH}" || true
-  chmod 600 "${ENV_PATH}" || true
+set_kv_file() {
+  # $1=env_path  $2=KEY  $3=VALUE
+  local f="$1" k="$2" v="$3" tmp="${f}.tmp"
+  awk -v k="$k" -v v="$v" '
+    BEGIN{done=0}
+    $0 ~ "^"k"=" {print k"="v; done=1; next}
+    {print}
+    END{if(!done) print k"="v}
+  ' "$f" > "$tmp" || return 1
+  mv "$tmp" "$f"
+  chmod 600 "$f" 2>/dev/null || true
 }
 
 set -a
@@ -380,21 +371,21 @@ if [[ -t 0 && -t 1 ]]; then
     if [[ -r /dev/tty && -w /dev/tty ]]; then
       printf "🔑 Enter your Google Gemini API key (hidden): " >/dev/tty
       IFS= read -rs key </dev/tty || true; echo >/dev/tty
-      if [[ -n "${key:-}" ]]; then set_kv "GOOGLE_API_KEY" "${key}"; export GOOGLE_API_KEY="${key}"; fi
+      if [[ -n "${key:-}" ]]; then set_kv_file "${ENV_PATH}" "GOOGLE_API_KEY" "${key}"; export GOOGLE_API_KEY="${key}"; fi
     else
       printf "🔑 Enter your Google Gemini API key (input visible): "
       IFS= read -r key || true; echo
-      if [[ -n "${key:-}" ]]; then set_kv "GOOGLE_API_KEY" "${key}"; export GOOGLE_API_KEY="${key}"; fi
+      if [[ -n "${key:-}" ]]; then set_kv_file "${ENV_PATH}" "GOOGLE_API_KEY" "${key}"; export GOOGLE_API_KEY="${key}"; fi
     fi
   elif [[ "${LLM_PROVIDER:-google}" == "openai" && -z "${OPENAI_API_KEY:-}" ]]; then
     if [[ -r /dev/tty && -w /dev/tty ]]; then
       printf "🔑 Enter your OpenAI API key (hidden): " >/dev/tty
       IFS= read -rs key </dev/tty || true; echo >/dev/tty
-      if [[ -n "${key:-}" ]]; then set_kv "OPENAI_API_KEY" "${key}"; export OPENAI_API_KEY="${key}"; fi
+      if [[ -n "${key:-}" ]]; then set_kv_file "${ENV_PATH}" "OPENAI_API_KEY" "${key}"; export OPENAI_API_KEY="${key}"; fi
     else
       printf "🔑 Enter your OpenAI API key (input visible): "
       IFS= read -r key || true; echo
-      if [[ -n "${key:-}" ]]; then set_kv "OPENAI_API_KEY" "${key}"; export OPENAI_API_KEY="${key}"; fi
+      if [[ -n "${key:-}" ]]; then set_kv_file "${ENV_PATH}" "OPENAI_API_KEY" "${key}"; export OPENAI_API_KEY="${key}"; fi
     fi
   fi
 fi
@@ -407,11 +398,7 @@ else
 fi
 
 exec "${PY}" -m BashBard "$@"
-'
-
-info "Creating launcher(s) in: $BIN_DIR"
-mkdir -p "$BIN_DIR"
-printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" > "$BIN_MAIN"
+LAUNCH
 chmod 0755 "$BIN_MAIN"
 
 # Lowercase convenience
@@ -469,6 +456,9 @@ if [[ "$MODE" != "system" ]]; then
     fi
   done
 fi
+
+# Patch PKG_PARENT in launcher
+sed -i "s#__PKG_PARENT__#${INSTALL_ROOT//\\/\\\\}#g" "$BIN_MAIN"
 
 echo ""
 success "BashBard installed successfully!"
