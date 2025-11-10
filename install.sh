@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # ==========================================================
-#  BashBard Installer (final, hardened, pip-safe, pretty-TUI)
+#  BashBard Installer (final hardened, pretty-TUI)
 #  - PEP 668/Kali-safe: always uses venv
-#  - Robust pip bootstrap: ensurepip -> get-pip.py fallback
-#  - Secure .env (0600), hidden API-key prompt & env seeding
-#  - No sudo+awk pitfalls (safe Python patcher)
+#  - Secure .env (0600), hidden API prompts
+#  - No sudo+awk quoting issues (safe Python patcher)
 #  - Ensures importability (.pth + PYTHONPATH)
 #  - Installs UI extras: rich, prompt_toolkit (no importlib.util)
 #  - git fallback to tarball
@@ -17,7 +16,7 @@ set -euo pipefail
 umask 022
 
 REPO_URL="${BASHBARD_REPO_URL:-https://github.com/5afagy/BashBard}"
-REPO_REF="${BASHBARD_REPO_REF:-refs/heads/main}"  # or refs/tags/vX.Y.Z
+REPO_REF="${BASHBARD_REPO_REF:-refs/heads/main}"  # can be refs/tags/vX.Y.Z
 TMP_DIR="$(mktemp -d -t bashbard-install-XXXXXX)"
 cleanup(){ [[ -d "${TMP_DIR:-}" ]] && rm -rf "$TMP_DIR"; }
 trap cleanup EXIT
@@ -39,14 +38,11 @@ Modes:
   system → installs to /usr/local (requires sudo or su)
 
 Optional env:
-  BASHBARD_REPO_URL=...           # override repo
+  BASHBARD_REPO_URL=...         # override repo (default GitHub)
   BASHBARD_REPO_REF=refs/tags/vX.Y.Z
-  LLM_PROVIDER=google|openai      # default: google
-  GOOGLE_API_KEY=...              # preseed key (optional)
-  OPENAI_API_KEY=...              # preseed key (optional)
-  GOOGLE_MODEL=gemini-2.5-flash-lite
-  OPENAI_MODEL=gpt-4o-mini
-  PYTHON=/path/to/python3         # override Python executable
+  LLM_PROVIDER=google|openai    # default: google
+  GOOGLE_API_KEY=...            # preseed key (optional)
+  OPENAI_API_KEY=...            # preseed key (optional)
 USAGE
 }
 
@@ -57,12 +53,12 @@ case "$MODE" in
   *) warn "Unknown mode '$MODE' — defaulting to 'user'"; MODE="user" ;;
 esac
 
-# Python + curl
+# Python and git/curl
 PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || error "Python 3 not found. Set PYTHON=/path/to/python3"
 command -v curl >/dev/null 2>&1 || error "curl is required."
 
-# Elevation
+# Elevation command
 SUDO=""
 if [[ "$MODE" == "system" ]]; then
   if command -v sudo >/dev/null 2>&1; then
@@ -88,59 +84,40 @@ ENV_PATH="$INSTALL_ROOT/.env"
 VENV_DIR="$INSTALL_ROOT/venv"
 PY_VENV="$VENV_DIR/bin/python"
 
-# Package manager helpers (for venv/pip bootstrap only if needed)
-pm_cmd() {
-  if   command -v apt-get >/dev/null 2>&1; then echo "apt-get -y"
-  elif command -v dnf     >/dev/null 2>&1; then echo "dnf -y"
-  elif command -v yum     >/dev/null 2>&1; then echo "yum -y"
-  elif command -v pacman  >/dev/null 2>&1; then echo "pacman --noconfirm"
-  elif command -v zypper  >/dev/null 2>&1; then echo "zypper -n"
-  elif command -v apk     >/dev/null 2>&1; then echo "apk --no-cache"
-  else echo ""; fi
-}
-pm_install() {
-  local pkgs=("$@")
-  local pm; pm="$(pm_cmd)"
-  [[ -z "$pm" ]] && return 1
-  case "$pm" in
-    apt-get*)   $SUDO $pm update >/dev/null 2>&1 || true; $SUDO $pm install "${pkgs[@]}" ;;
-    dnf*|yum*)  $SUDO $pm install "${pkgs[@]}" ;;
-    pacman*)    $SUDO $pm -Sy "${pkgs[@]}" ;;
-    zypper*)    $SUDO $pm install -y "${pkgs[@]}" ;;
-    apk*)       $SUDO $pm add "${pkgs[@]}" ;;
-  esac
-}
-
-# Show Python/pip info (do not modify system site-packages)
+# pip presence for info only (don’t touch system site-packages)
 "$PY" -m pip --version >/dev/null 2>&1 || "$PY" -m ensurepip --upgrade >/dev/null 2>&1 || true
 info "Using Python: $("$PY" -c 'import sys; print(sys.executable)')"
-info "Pip version:  $("$PY" -m pip --version 2>/dev/null || echo 'not present (will be bootstrapped in venv)')"
+info "Pip version:  $("$PY" -m pip --version || echo 'unknown')"
 
-# Fetch source (git, fallback to tarball)
+# --- Fetch source (git, fallback to tarball) ---
 fetch_source() {
   local dest="$1"
   info "Downloading BashBard..."
   if command -v git >/dev/null 2>&1; then
-    if git clone --depth=1 "$REPO_URL" "$dest" >/dev/null 2>&1; then return 0; else warn "git clone failed; using tarball."; fi
+    if git clone --depth=1 "$REPO_URL" "$dest" >/dev/null 2>&1; then
+      return 0
+    else
+      warn "git clone failed; falling back to tarball."
+    fi
   else
-    warn "git not available; using tarball."
+    warn "git not available; using tarball fallback."
   fi
-  local gh_path tar_ref
-  gh_path="$(echo "$REPO_URL" | sed -E 's#https?://github.com/##')"
-  tar_ref="${REPO_REF#refs/heads/}"
-  curl -fsSL "https://codeload.github.com/${gh_path}/tar.gz/${tar_ref}" -o "$TMP_DIR/repo.tar.gz" || error "Failed to download tarball."
+  local gh_path tar_url inner
+  gh_path="$(echo "$REPO_URL" | sed -E 's#https?://github.com/##' )"
+  tar_url="https://codeload.github.com/${gh_path}/tar.gz/${REPO_REF#refs/heads/}"
+  curl -fsSL "$tar_url" -o "$TMP_DIR/repo.tar.gz" || error "Failed to download tarball."
   mkdir -p "$dest.extracted"
   tar -xzf "$TMP_DIR/repo.tar.gz" -C "$dest.extracted"
-  # Copy entire tree (repo root), assuming it contains BashBard/
-  local top; top="$(find "$dest.extracted" -mindepth 1 -maxdepth 1 -type d | head -n1)"
-  [[ -n "$top" ]] || error "Unexpected tarball layout."
+  inner="$(find "$dest.extracted" -maxdepth 1 -type d -name 'BashBard*' | head -n1)"
+  [[ -n "$inner" ]] || error "Unexpected tarball layout."
   mkdir -p "$dest"
-  cp -a "$top"/* "$dest"/
+  cp -a "$inner"/* "$dest"/
 }
+
 fetch_source "$TMP_DIR"
 [[ -d "$TMP_DIR/BashBard" ]] || error "Repository structure invalid (missing BashBard/)."
 
-# Copy to install root
+# --- Copy files to install root ---
 info "Installing BashBard package to: $INSTALL_ROOT"
 if [[ -n "$SUDO" ]]; then
   $SUDO "mkdir -p '$INSTALL_ROOT'"
@@ -152,65 +129,36 @@ else
   cp -a "$TMP_DIR/BashBard" "$INSTALL_ROOT/"
 fi
 
-# Ensure venv module (install python3-venv via pkg manager when possible)
-ensure_venv_module() {
-  if "$PY" -c 'import venv' >/dev/null 2>&1; then return 0; fi
-  warn "Python venv module missing; attempting to install."
-  local pm; pm="$(pm_cmd)"
-  if [[ -n "$pm" && -n "$SUDO" ]]; then
-    case "$pm" in
-      apt-get*)   pm_install python3-venv python3-pip || true ;;
-      dnf*|yum*)  pm_install python3-venv python3-pip || pm_install python3-pip || true ;;
-      pacman*)    pm_install python-virtualenv python-pip || pm_install python || true ;;
-      zypper*)    pm_install python3-venv python3-pip || true ;;
-      apk*)       pm_install python3 py3-virtualenv py3-pip || true ;;
-    esac
-  else
-    warn "No privileges or package manager to install venv; continuing and hoping venv is present."
-  fi
-  "$PY" -c 'import venv' >/dev/null 2>&1 || error "venv module unavailable. Install it (e.g. sudo apt-get install python3-venv) and rerun."
-}
-
-# Create venv + robust pip bootstrap
-create_venv_and_pip() {
-  ensure_venv_module
+# --- Create venv (PEP 668 safe) ---
+create_venv() {
   if [[ -n "$SUDO" ]]; then
-    $SUDO "'$PY' -m venv '$VENV_DIR'" || true
+    $SUDO "'$PY' -m venv '$VENV_DIR'"
+    $SUDO "'$PY_VENV' -m pip install -q --upgrade pip setuptools wheel" || true
   else
-    "$PY" -m venv "$VENV_DIR" || true
+    "$PY" -m venv "$VENV_DIR"
+    "$PY_VENV" -m pip install -q --upgrade pip setuptools wheel || true
   fi
-  # If venv Python missing, fail
-  [[ -x "$PY_VENV" ]] || error "Virtualenv creation failed at $VENV_DIR"
-
-  # Ensure pip in venv: try ensurepip, then get-pip.py
-  if ! "$PY_VENV" -m pip --version >/dev/null 2>&1; then
-    info "Bootstrapping pip inside venv (ensurepip)..."
-    set +e
-    "$PY_VENV" -m ensurepip --upgrade --default-pip 2>/dev/null
-    local rc=$?
-    set -e
-    if [[ $rc -ne 0 || ! "$PY_VENV" -m pip --version >/dev/null 2>&1 ]]; then
-      info "ensurepip unavailable; falling back to get-pip.py bootstrap..."
-      curl -fsSL https://bootstrap.pypa.io/get-pip.py -o "$TMP_DIR/get-pip.py" || error "Failed to download get-pip.py"
-      "$PY_VENV" "$TMP_DIR/get-pip.py" || error "get-pip.py failed to install pip in venv"
-    fi
-  fi
-  # Upgrade core packaging tools (quiet best-effort)
-  "$PY_VENV" -m pip install -q --upgrade pip setuptools wheel || true
 }
 info "Creating virtual environment: $VENV_DIR"
-create_venv_and_pip
+if ! create_venv; then
+  warn "venv creation failed. On Debian/Ubuntu/Kali: sudo apt-get install python3-venv"
+  error "Virtualenv creation failed."
+fi
 
-# Install requirements into venv
+# --- Install requirements into venv ---
 REQ_FILE="$TMP_DIR/requirements.txt"
 if [[ -f "$REQ_FILE" ]]; then
   info "Installing dependencies into venv..."
-  "$PY_VENV" -m pip install -r "$REQ_FILE" --no-warn-script-location
+  if [[ -n "$SUDO" ]]; then
+    $SUDO "'$PY_VENV' -m pip install -r '$REQ_FILE' --no-warn-script-location"
+  else
+    "$PY_VENV" -m pip install -r "$REQ_FILE" --no-warn-script-location
+  fi
 else
   warn "No requirements.txt; skipping dependency install."
 fi
 
-# UI extras (pretty TUI) — robust detector (no importlib.util)
+# --- UI extras (pretty TUI): install if missing (no importlib.util) ---
 info "Ensuring UI extras (rich, prompt_toolkit) are installed..."
 MISSING="$("$PY_VENV" - <<'PY'
 mods = ["rich", "prompt_toolkit"]
@@ -224,13 +172,20 @@ print(" ".join(missing))
 PY
 )"
 if [[ -n "$MISSING" ]]; then
-  PKGS=()
-  [[ "$MISSING" == *"rich"* ]] && PKGS+=("rich>=13.9")
-  [[ "$MISSING" == *"prompt_toolkit"* ]] && PKGS+=("prompt_toolkit>=3.0")
-  ((${#PKGS[@]})) && "$PY_VENV" -m pip install --no-warn-script-location "${PKGS[@]}"
+  if [[ "$MISSING" == *"rich"* ]]; then UI_RICH="rich>=13.9"; else UI_RICH=""; fi
+  if [[ "$MISSING" == *"prompt_toolkit"* ]]; then UI_PTK="prompt_toolkit>=3.0"; else UI_PTK=""; fi
+  UI_PKGS=($UI_RICH $UI_PTK)
+  if (( ${#UI_PKGS[@]} > 0 )); then
+    info "Installing UI extras into venv: ${UI_PKGS[*]}"
+    if [[ -n "$SUDO" ]]; then
+      $SUDO "'$PY_VENV' -m pip install --no-warn-script-location ${UI_PKGS[*]}"
+    else
+      "$PY_VENV" -m pip install --no-warn-script-location "${UI_PKGS[@]}"
+    fi
+  fi
 fi
 
-# Write .pth into venv site-packages (ensures importability)
+# --- Write .pth into venv site-packages (ensures importability) ---
 SITE_PKGS="$("$PY_VENV" - <<'PY'
 import sysconfig
 print(sysconfig.get_paths().get('purelib') or sysconfig.get_paths().get('platlib') or '')
@@ -239,18 +194,35 @@ PY
 if [[ -n "$SITE_PKGS" && -d "$SITE_PKGS" ]]; then
   PTH_FILE="$SITE_PKGS/bashbard_install_root.pth"
   echo "$INSTALL_ROOT" > "$TMP_DIR/bashbard_install_root.pth"
-  mv "$TMP_DIR/bashbard_install_root.pth" "$PTH_FILE"
+  if [[ -n "$SUDO" ]]; then
+    $SUDO "mkdir -p '$(dirname "$PTH_FILE")' && mv '$TMP_DIR/bashbard_install_root.pth' '$PTH_FILE'"
+  else
+    mv "$TMP_DIR/bashbard_install_root.pth" "$PTH_FILE"
+  fi
   info "Linked site-packages via .pth: $PTH_FILE"
 else
   warn "Could not determine site-packages; launcher will export PYTHONPATH."
 fi
 
-# .env handling (0600), seed keys from env if provided
+# --- .env: create if missing, 0600 ---
 info "Configuring BashBard environment..."
 if [[ ! -f "$ENV_PATH" ]]; then
-  mkdir -p "$(dirname "$ENV_PATH")"
-  install -m 600 /dev/null "$ENV_PATH"
-  cat > "$ENV_PATH" <<EOF
+  if [[ -n "$SUDO" ]]; then
+    $SUDO "mkdir -p '$(dirname "$ENV_PATH")'"
+    printf '%s\n' "# Agentic BashBard environment configuration" \
+                  "# Automatically generated during installation" \
+                  "" \
+                  "LLM_PROVIDER=${LLM_PROVIDER:-google}" \
+                  "GOOGLE_API_KEY=${GOOGLE_API_KEY:-}" \
+                  "GOOGLE_MODEL=${GOOGLE_MODEL:-gemini-2.5-flash-lite}" \
+                  "OPENAI_API_KEY=${OPENAI_API_KEY:-}" \
+                  "OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}" \
+                  "DRY_RUN=0" > "$TMP_DIR/.env.new"
+    $SUDO "install -m 600 '$TMP_DIR/.env.new' '$ENV_PATH'"
+  else
+    mkdir -p "$(dirname "$ENV_PATH")"
+    install -m 600 /dev/null "$ENV_PATH"
+    cat > "$ENV_PATH" <<EOF
 # Agentic BashBard environment configuration
 # Automatically generated during installation
 
@@ -261,38 +233,21 @@ OPENAI_API_KEY=${OPENAI_API_KEY:-}
 OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
 DRY_RUN=0
 EOF
-  chmod 600 "$ENV_PATH" || true
+    chmod 600 "$ENV_PATH" || true
+  fi
   success "Created .env at $ENV_PATH (0600)"
 else
-  chmod 600 "$ENV_PATH" || true
+  if [[ -n "$SUDO" ]]; then $SUDO "chmod 600 '$ENV_PATH'" || true; else chmod 600 "$ENV_PATH" || true; fi
   warn ".env already exists — keeping existing values (permissions set to 0600)."
 fi
 
-# Optional first-run key prompt if interactive (hidden, google provider)
+# --- Optional first-run key prompt if interactive ---
 if [[ -t 0 && -t 1 ]]; then
-  NEED_PROMPT="$("$PY" - <<PY
-import os
-env_path = r"""$ENV_PATH"""
-provider = os.environ.get("LLM_PROVIDER","google")
-want = (provider == "google")
-val=""
-try:
-    with open(env_path, "r", encoding="utf-8") as f:
-        for ln in f:
-            if ln.startswith("GOOGLE_API_KEY="):
-                val = ln.strip().split("=",1)[1]
-                break
-except FileNotFoundError:
-    pass
-print("yes" if (want and (val=='')) else "no")
-PY
-)"
-  if [[ "$NEED_PROMPT" == "yes" ]]; then
-    echo ""
-    read -srp "🔑 Enter your Google Gemini API key (or press Enter to skip): " GEMINI_KEY || true
-    echo ""
-    if [[ -n "${GEMINI_KEY:-}" ]]; then
-      "$PY" - <<PY > "$TMP_DIR/.env.updated"
+  echo ""
+  read -srp "🔑 Enter your Google Gemini API key (or press Enter to skip): " GEMINI_KEY || true
+  echo ""
+  if [[ -n "${GEMINI_KEY:-}" ]]; then
+    "$PY" - <<PY > "$TMP_DIR/.env.updated"
 import sys
 p = r"""$ENV_PATH"""
 key = "GOOGLE_API_KEY"
@@ -313,18 +268,21 @@ if not done:
     out.append(f"{key}={val}")
 print("\\n".join(out))
 PY
+    if [[ -n "$SUDO" ]]; then
+      $SUDO "mv '$TMP_DIR/.env.updated' '$ENV_PATH' && chmod 600 '$ENV_PATH' || true"
+    else
       mv "$TMP_DIR/.env.updated" "$ENV_PATH"
       chmod 600 "$ENV_PATH" || true
-      success "Gemini API key saved to $ENV_PATH"
-    else
-      warn "No API key entered now; launcher will prompt on first run."
     fi
+    success "Gemini API key saved to $ENV_PATH"
+  else
+    warn "No API key entered now; launcher will prompt on first run."
   fi
 else
   warn "Non-interactive install; launcher will prompt for API key on first run."
 fi
 
-# Launcher (venv, PYTHONPATH, pretty TTY, hidden prompt)
+# --- Launcher (venv, PYTHONPATH, pretty TTY, hidden prompt) ---
 LAUNCHER='#!/usr/bin/env bash
 set -euo pipefail
 
@@ -406,7 +364,7 @@ if [[ -t 0 && -t 1 ]]; then
   fi
 fi
 
-# Ensure import visibility (.pth should handle; PYTHONPATH as safety net)
+# Ensure import visibility (.pth should handle; PYTHONPATH is safety net)
 if [[ -n "${PYTHONPATH:-}" ]]; then
   export PYTHONPATH="${PKG_PARENT}:${PYTHONPATH}"
 else
@@ -417,17 +375,30 @@ exec "${PY}" -m BashBard "$@"
 '
 
 info "Creating launcher(s) in: $BIN_DIR"
-mkdir -p "$BIN_DIR"
-printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" > "$BIN_MAIN"
-chmod 0755 "$BIN_MAIN"
+if [[ -n "$SUDO" ]]; then
+  $SUDO "mkdir -p '$BIN_DIR'"
+  printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" > "$TMP_DIR/launcher.new"
+  $SUDO "mv '$TMP_DIR/launcher.new' '$BIN_MAIN' && chmod 0755 '$BIN_MAIN'"
+else
+  mkdir -p "$BIN_DIR"
+  printf '%s\n' "${LAUNCHER/__PKG_PARENT__/$INSTALL_ROOT}" > "$BIN_MAIN"
+  chmod 0755 "$BIN_MAIN"
+fi
 
 # Lowercase convenience (symlink or wrapper)
-if ln -sf "BashBard" "$BIN_LOWER" 2>/dev/null; then :; else
-  cat > "$BIN_LOWER" <<'EOW'
+if [[ -n "$SUDO" ]]; then
+  if $SUDO ln -sf "BashBard" "$BIN_LOWER" 2>/dev/null; then :; else
+    printf '%s\n' '#!/usr/bin/env bash' 'exec BashBard "$@"' > "$TMP_DIR/bashbard.new"
+    $SUDO "mv '$TMP_DIR/bashbard.new' '$BIN_LOWER' && chmod 0755 '$BIN_LOWER'"
+  fi
+else
+  if ln -sf "BashBard" "$BIN_LOWER" 2>/dev/null; then :; else
+    cat > "$BIN_LOWER" <<'EOW'
 #!/usr/bin/env bash
 exec BashBard "$@"
 EOW
-  chmod 0755 "$BIN_LOWER"
+    chmod 0755 "$BIN_LOWER"
+  fi
 fi
 
 # Try to make runnable immediately (shim)
@@ -443,6 +414,7 @@ EOF
     chmod 0755 "$dest/$name"
   fi
 }
+
 activate_now=false
 if is_on_path "$BIN_DIR"; then
   activate_now=true
@@ -450,6 +422,10 @@ else
   if is_on_path "/usr/local/bin"; then
     if ln -sf "$BIN_MAIN" "/usr/local/bin/BashBard" 2>/dev/null && ln -sf "$BIN_MAIN" "/usr/local/bin/bashbard" 2>/dev/null; then
       activate_now=true
+    elif [[ -n "$SUDO" ]]; then
+      $SUDO ln -sf "$BIN_MAIN" "/usr/local/bin/BashBard" 2>/dev/null || true
+      $SUDO ln -sf "$BIN_MAIN" "/usr/local/bin/bashbard" 2>/dev/null || true
+      [[ -x "/usr/local/bin/BashBard" ]] && activate_now=true
     fi
   fi
   if ! $activate_now; then
