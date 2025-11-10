@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # ==========================================================
-#  BashBard Installer (final hardened)
-#  AI Assistant for Shell Automation and Command Correction
-#  Author: Khafagy | Co-Developer: Naggar
-#  Maintainer of this fix: (installer rewrite)
-#  License: Apache 2.0
+#  BashBard Installer (final hardened, pretty-TUI)
+#  - PEP 668/Kali-safe: always uses venv
+#  - Secure .env (0600), hidden API prompts
+#  - Avoids sudo+awk quoting issues (uses Python patcher)
+#  - Ensures importability (.pth + PYTHONPATH)
+#  - Installs UI extras: rich, prompt_toolkit
+#  - Works user/system; keeps your UX and colors
 # ==========================================================
 
 # Re-exec with bash if invoked by sh/dash
@@ -31,12 +33,13 @@ Usage:
 
 Modes:
   user   → installs to ~/.local (default)
-  system → installs to /usr/local (requires sudo)
+  system → installs to /usr/local (requires sudo or su)
 
 Env (optional):
-  BASHBARD_REPO_URL=...             # override repo URL
-  LLM_PROVIDER=google|openai        # default: google
-  GOOGLE_API_KEY=... OPENAI_API_KEY=...
+  BASHBARD_REPO_URL=...           # override repo
+  LLM_PROVIDER=google|openai      # default: google
+  GOOGLE_API_KEY=...              # preseed key (optional)
+  OPENAI_API_KEY=...              # preseed key (optional)
 USAGE
 }
 
@@ -50,7 +53,7 @@ esac
 # Python and git
 PY="${PYTHON:-python3}"
 command -v "$PY" >/dev/null 2>&1 || error "Python 3 not found."
-command -v git >/dev/null 2>&1 || warn "git not found — if clone fails, please install git."
+command -v git >/dev/null 2>&1 || warn "git not found — if clone fails, install git."
 
 # Elevation command
 SUDO=""
@@ -72,7 +75,6 @@ else
   INSTALL_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/bashbard"
   BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 fi
-
 BIN_MAIN="$BIN_DIR/BashBard"
 BIN_LOWER="$BIN_DIR/bashbard"
 ENV_PATH="$INSTALL_ROOT/.env"
@@ -88,7 +90,7 @@ info "Pip version:  $("$PY" -m pip --version || echo 'unknown')"
 # Download
 info "Downloading BashBard from GitHub..."
 if ! git clone --depth=1 "$REPO_URL" "$TMP_DIR" >/dev/null 2>&1; then
-  error "Failed to clone repository. Please ensure git and network connectivity are available."
+  error "Failed to clone repository. Check network or install git."
 fi
 [[ -d "$TMP_DIR/BashBard" ]] || error "Repository structure invalid (missing BashBard/)."
 
@@ -116,8 +118,7 @@ create_venv() {
 }
 info "Creating virtual environment: $VENV_DIR"
 if ! create_venv; then
-  # Help on apt-based distros
-  warn "Could not create venv. On Debian/Ubuntu/Kali you may need: sudo apt-get install python3-venv"
+  warn "venv creation failed. On Debian/Ubuntu/Kali install: sudo apt-get install python3-venv"
   error "Virtualenv creation failed."
 fi
 
@@ -135,6 +136,29 @@ if [[ -f "$REQ_FILE" ]]; then
   [[ $RC -eq 0 ]] || error "Failed to install one or more dependencies into the virtualenv."
 else
   warn "No requirements.txt; skipping dependency install."
+fi
+
+# UI extras for pretty TUI
+info "Ensuring UI extras (rich, prompt_toolkit) are installed..."
+set +e
+"$PY_VENV" - <<'PY'
+import importlib, sys
+missing=[m for m in ("rich","prompt_toolkit") if importlib.util.find_spec(m) is None]
+print(" ".join(missing))
+PY
+MISSING="$("$PY_VENV" - <<'PY'
+import importlib
+print(" ".join([m for m in ("rich","prompt_toolkit") if importlib.util.find_spec(m) is None]))
+PY
+)"
+set -e
+if [[ -n "$MISSING" ]]; then
+  info "Installing UI extras into venv: $MISSING"
+  if [[ -n "$SUDO" ]]; then
+    $SUDO "'$PY_VENV' -m pip install --no-warn-script-location $MISSING"
+  else
+    "$PY_VENV" -m pip install --no-warn-script-location $MISSING
+  fi
 fi
 
 # Make package importable:
@@ -197,11 +221,9 @@ fi
 # Prompt during install only if interactive; otherwise defer to first run
 if [[ -t 0 && -t 1 ]]; then
   echo ""
-  # Hidden input
   read -srp "🔑 Enter your Google Gemini API key (or press Enter to skip): " GEMINI_KEY || true
   echo ""
   if [[ -n "${GEMINI_KEY:-}" ]]; then
-    # Safely update .env using python (avoid awk quoting and sudo piping issues)
     "$PY" - <<PY > "$TMP_DIR/.env.updated"
 import sys
 p = r"""$ENV_PATH"""
@@ -238,7 +260,7 @@ else
   warn "Non-interactive install; launcher will prompt for API key on first run."
 fi
 
-# --- Hardened launcher (venv, PYTHONPATH, hidden prompt, 0600) ---
+# --- Hardened launcher (venv, PYTHONPATH, pretty TTY, hidden prompt) ---
 LAUNCHER='#!/usr/bin/env bash
 set -euo pipefail
 
@@ -256,7 +278,7 @@ fi
 # Ensure .env directory exists
 mkdir -p "$(dirname "${ENV_PATH}")"
 
-# Create a minimal .env if missing (0600)
+# Create minimal .env if missing (0600)
 if [[ ! -f "${ENV_PATH}" ]]; then
   umask 177
   cat >"${ENV_PATH}" <<EOF
@@ -270,29 +292,27 @@ EOF
   chmod 600 "${ENV_PATH}" || true
 fi
 
-# Safe set_kv helper (local write then move)
+# helper to set key in .env (safe)
 set_kv(){
   local k="$1" v="$2"
   python3 - "$k" "$v" "${ENV_PATH}" <<'PY'
 import sys
 k, v, p = sys.argv[1], sys.argv[2].replace('"','\\"'), sys.argv[3]
 try:
-    with open(p, "r", encoding="utf-8") as f:
-        lines = f.read().splitlines()
+  with open(p,"r",encoding="utf-8") as f:
+    lines=f.read().splitlines()
 except FileNotFoundError:
-    lines = []
-done=False
-out=[]
+  lines=[]
+done=False; out=[]
 for ln in lines:
-    if ln.startswith(k+"="):
-        out.append(f"{k}={v}")
-        done=True
-    else:
-        out.append(ln)
+  if ln.startswith(k+"="):
+    out.append(f"{k}={v}"); done=True
+  else:
+    out.append(ln)
 if not done:
-    out.append(f"{k}={v}")
+  out.append(f"{k}={v}")
 with open(p+".tmp","w",encoding="utf-8") as f:
-    f.write("\\n".join(out))
+  f.write("\\n".join(out))
 PY
   mv "${ENV_PATH}.tmp" "${ENV_PATH}" || true
   chmod 600 "${ENV_PATH}" || true
@@ -303,7 +323,13 @@ set -a
 . "${ENV_PATH}"
 set +a
 
-# First-run secret prompt (hidden) for selected provider
+# Pretty TTY defaults
+export PYTHONUTF8=1
+export PYTHONIOENCODING=UTF-8
+export RICH_FORCE_TERMINAL=1
+export TERM="${TERM:-xterm-256color}"
+
+# First-run hidden prompts (if interactive)
 if [[ -t 0 && -t 1 ]]; then
   if [[ "${LLM_PROVIDER:-google}" == "google" && -z "${GOOGLE_API_KEY:-}" ]]; then
     printf "🔑 Enter your Google Gemini API key: " >/dev/tty
@@ -316,7 +342,7 @@ if [[ -t 0 && -t 1 ]]; then
   fi
 fi
 
-# Ensure package import visibility (fallback if .pth is missing)
+# Ensure import visibility (.pth should handle this; PYTHONPATH as safety net)
 if [[ -n "${PYTHONPATH:-}" ]]; then
   export PYTHONPATH="${PKG_PARENT}:${PYTHONPATH}"
 else
