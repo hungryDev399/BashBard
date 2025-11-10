@@ -6,7 +6,7 @@
 #  - Avoids sudo+awk quoting issues (uses Python patcher)
 #  - Ensures importability (.pth + PYTHONPATH)
 #  - Installs UI extras: rich, prompt_toolkit
-#  - Works user/system; keeps your UX and colors
+#  - Supports user/system modes
 # ==========================================================
 
 # Re-exec with bash if invoked by sh/dash
@@ -138,20 +138,18 @@ else
   warn "No requirements.txt; skipping dependency install."
 fi
 
-# UI extras for pretty TUI
-info "Ensuring UI extras (rich, prompt_toolkit) are installed..."
-set +e
-"$PY_VENV" - <<'PY'
-import importlib, sys
-missing=[m for m in ("rich","prompt_toolkit") if importlib.util.find_spec(m) is None]
+# --- UI extras (pretty TUI): rich + prompt_toolkit (robust detector) ---
+MISSING="$("$PY_VENV" - <<'PY'
+mods = ["rich", "prompt_toolkit"]
+missing = []
+for m in mods:
+    try:
+        __import__(m)
+    except Exception:
+        missing.append(m)
 print(" ".join(missing))
 PY
-MISSING="$("$PY_VENV" - <<'PY'
-import importlib
-print(" ".join([m for m in ("rich","prompt_toolkit") if importlib.util.find_spec(m) is None]))
-PY
 )"
-set -e
 if [[ -n "$MISSING" ]]; then
   info "Installing UI extras into venv: $MISSING"
   if [[ -n "$SUDO" ]]; then
@@ -437,7 +435,7 @@ echo ""
 success "BashBard installed successfully!"
 if $activate_now; then
   echo -e "${CYAN}💡 Run now:${RESET}  BashBard --help  ${CYAN}or${RESET}  bashbard --help"
-  echo -e "${CYAN}💡 First run will prompt for API key if missing and save to:${RESET}  $ENV_PATH"
+  echo -e "${CYAN}💡 First run will prompt for missing API key if needed and save to:${RESET}  $ENV_PATH"
 else
   warn "Could not place a shim in a directory already on your current PATH."
   echo -e "${CYAN}👉 Run by absolute path:${RESET}  $BIN_MAIN --help"
