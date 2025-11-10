@@ -5,8 +5,12 @@
 [![Visitors](https://visitor-badge.laobi.icu/badge?page_id=5afagy.BashBard&left_color=grey&right_color=brightgreen)](https://github.com/5afagy/BashBard)
 
 <div align="center">
+  
+[Demo_v1.webm](https://github.com/user-attachments/assets/1494963f-7390-4119-a7e9-b44e35608c05)
+
 
 # <span style="font-size: 1.8em;">🧠</span> **BashBard**  
+
 ### *AI-Powered Shell Intelligence & Safety Layer*
 
 > **Think in English. Execute in Bash. Never regret a command.**
