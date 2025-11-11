@@ -184,9 +184,7 @@ Together we’ll make BashBard an essential, trustworthy companion for anyone wo
 
 <div align="center">
 
-## Installation & Demo Video
 
-[Watch: Install & Use BashBard in 60 Seconds](https://your-video-link-here.com) *(coming soon)*
 
 <!--```bash
 curl -sSL https://github.com/5afagy/BashBard/raw/refs/heads/main/install.sh | bash && BashBard
